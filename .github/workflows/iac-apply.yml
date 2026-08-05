@@ -1,0 +1,149 @@
+name: IaC — Apply (infra → addons)
+
+# Dispara no merge para main. Cada stage replaneja e aplica no mesmo job, com
+# -auto-approve: nenhum plano atravessa a fronteira entre runs.
+#
+# O gate humano é o environment "production" no job de infra. Aprovada a infra, o
+# addons segue automaticamente — é a mesma decisão ("aplicar o que está na
+# main"). Se quiser aprovar os dois separadamente, basta adicionar
+# `environment: production` também no job addons.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "infra/**"
+      - "addons/**"
+      - ".github/workflows/iac-apply.yml"
+  workflow_dispatch:
+    inputs:
+      region:
+        description: "Região AWS"
+        type: string
+        default: us-east-1
+
+permissions:
+  id-token: write
+  contents: read
+
+# cancel-in-progress false: cancelar um apply pela metade deixa o state
+# divergente da realidade.
+concurrency:
+  group: iac-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ${{ inputs.region || 'us-east-1' }}
+  TF_IN_AUTOMATION: "true"
+  TF_VERSION: "1.14.4"
+
+jobs:
+  infra:
+    name: Stage 1 — infra
+    runs-on: ubuntu-latest
+    environment: production
+    outputs:
+      cluster_name: ${{ steps.outputs.outputs.cluster_name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Autenticar na AWS (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_OIDC_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Backend config
+        id: backend
+        run: |
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          echo "bucket=togglemaster-iac-tfstate-${ACCOUNT_ID}" >> "$GITHUB_OUTPUT"
+
+      - name: Terraform init
+        working-directory: infra
+        run: |
+          terraform init -input=false \
+            -backend-config="bucket=${{ steps.backend.outputs.bucket }}" \
+            -backend-config="region=${{ env.AWS_REGION }}" \
+            -backend-config="use_lockfile=true"
+
+      # O plan aqui é para o log: mostra o que o apply vai fazer, no mesmo run,
+      # com o mesmo state. Não é persistido nem reaproveitado.
+      - name: Terraform plan
+        working-directory: infra
+        run: terraform plan -input=false -no-color
+
+      - name: Terraform apply
+        working-directory: infra
+        run: terraform apply -input=false -auto-approve
+
+      - name: Coletar outputs
+        id: outputs
+        working-directory: infra
+        run: |
+          echo "cluster_name=$(terraform output -raw cluster_name)" >> "$GITHUB_OUTPUT"
+
+  addons:
+    name: Stage 2 — addons (controllers + Argo CD)
+    runs-on: ubuntu-latest
+    needs: infra
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Autenticar na AWS (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_OIDC_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Backend config
+        id: backend
+        run: |
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          echo "bucket=togglemaster-iac-tfstate-${ACCOUNT_ID}" >> "$GITHUB_OUTPUT"
+
+      - name: Terraform init
+        working-directory: addons
+        run: |
+          terraform init -input=false \
+            -backend-config="bucket=${{ steps.backend.outputs.bucket }}" \
+            -backend-config="region=${{ env.AWS_REGION }}" \
+            -backend-config="use_lockfile=true"
+
+      - name: Terraform plan
+        working-directory: addons
+        run: terraform plan -input=false -no-color
+
+      - name: Terraform apply
+        working-directory: addons
+        run: terraform apply -input=false -auto-approve
+
+  resumo:
+    name: Resumo
+    runs-on: ubuntu-latest
+    needs: [infra, addons]
+    if: always()
+    steps:
+      - name: Escrever resumo
+        run: |
+          {
+            echo "### IaC — Apply"
+            echo ""
+            echo "| Stage | Resultado |"
+            echo "|---|---|"
+            echo "| infra | ${{ needs.infra.result }} |"
+            echo "| addons | ${{ needs.addons.result }} |"
+            echo ""
+            echo "Cluster: \`${{ needs.infra.outputs.cluster_name }}\`"
+            echo ""
+            echo "O Argo CD assume a partir daqui — os componentes de plataforma e"
+            echo "os microsserviços vêm do repositório \`togglemaster-gitops\`."
+          } >> "$GITHUB_STEP_SUMMARY"

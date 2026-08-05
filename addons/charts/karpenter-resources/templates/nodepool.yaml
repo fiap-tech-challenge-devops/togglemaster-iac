@@ -1,0 +1,48 @@
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  name: default
+spec:
+  template:
+    spec:
+      nodeClassRef:
+        group: karpenter.k8s.aws
+        kind: EC2NodeClass
+        name: default
+
+      # O Karpenter escolhe o tipo de instância a partir do que os pods pendentes
+      # pedem, dentro destes limites. Quanto mais amplo, melhor o encaixe e o preço.
+      requirements:
+        - key: karpenter.sh/capacity-type
+          operator: In
+          values:
+{{- range .Values.capacityTypes }}
+            - {{ . }}
+{{- end }}
+        - key: karpenter.k8s.aws/instance-category
+          operator: In
+          values:
+{{- range .Values.instanceCategories }}
+            - {{ . }}
+{{- end }}
+        - key: karpenter.k8s.aws/instance-generation
+          operator: Gt
+          values:
+            - "2"
+        - key: kubernetes.io/arch
+          operator: In
+          values:
+            - amd64
+
+      expireAfter: 720h # recicla os nós a cada 30 dias, trazendo AMI atualizada
+
+  disruption:
+    # WhenEmptyOrUnderutilized: além de remover nós vazios, consolida cargas em
+    # menos nós quando dá. É o que faz o custo cair depois de um pico de carga.
+    consolidationPolicy: WhenEmptyOrUnderutilized
+    consolidateAfter: {{ .Values.consolidateAfter }}
+
+  # Teto absoluto de vCPU. É a trava de custo: sem ela, um bug de autoscaling na
+  # aplicação vira uma fatura.
+  limits:
+    cpu: {{ .Values.cpuLimit }}

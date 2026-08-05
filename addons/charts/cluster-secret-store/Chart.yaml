@@ -1,0 +1,9 @@
+apiVersion: v2
+name: cluster-secret-store
+description: >-
+  ClusterSecretStore apontando o External Secrets Operator para o AWS Secrets
+  Manager. Existe como chart local porque é um CR de uma CRD instalada no mesmo
+  apply — o provider kubernetes validaria o manifesto no plan, quando a CRD ainda
+  não existe.
+type: application
+version: 0.1.0

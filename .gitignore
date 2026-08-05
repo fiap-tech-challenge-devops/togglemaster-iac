@@ -1,0 +1,22 @@
+.terraform/
+.terraform.lock.hcl
+
+# O arquivo de plano contém todos os valores dos atributos em texto claro,
+# inclusive senhas e conteúdo do Secrets Manager. Nunca versionar.
+tfplan
+*.tfplan
+plan.txt
+
+*.tfstate
+*.tfstate.*
+
+*.tfvars
+!*.tfvars.example
+
+crash.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc

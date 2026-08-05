@@ -1,0 +1,26 @@
+# Preenchidos pelo Terraform (addons/karpenter.tf).
+clusterName: ""
+nodeRole: ""
+
+amiAlias: al2023@latest
+
+capacityTypes:
+  - spot
+  - on-demand
+
+instanceCategories:
+  - t
+  - m
+  - c
+
+instanceGenerations:
+  - "3"
+  - "4"
+  - "5"
+  - "6"
+  - "7"
+
+cpuLimit: 32
+
+# Tempo sem pods antes de o Karpenter recolher o nó.
+consolidateAfter: 60s

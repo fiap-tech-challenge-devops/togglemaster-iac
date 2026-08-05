@@ -1,0 +1,5 @@
+# Preenchidos pelo Terraform (addons/controllers.tf).
+region: us-east-1
+serviceAccountName: external-secrets
+namespace: external-secrets
+storeName: aws-secrets-manager

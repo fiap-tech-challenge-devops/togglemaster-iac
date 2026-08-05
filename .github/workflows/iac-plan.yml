@@ -1,0 +1,202 @@
+name: IaC — Plan (Pull Request)
+
+# Roda em PR para revisão. O plano gerado aqui é DESCARTADO: não vira artifact e
+# não é reaplicado depois.
+#
+# Dois motivos. O arquivo de plano contém todos os valores dos atributos em texto
+# claro, inclusive os sensíveis (senha do RDS, conteúdo do Secrets Manager) — um
+# artifact do Actions é baixável por qualquer pessoa com leitura no repositório.
+# E um plano gerado no PR fica obsoleto assim que o state muda ou a main avança.
+#
+# O apply replaneja no próprio run. Ver iac-apply.yml.
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  id-token: write
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: iac-plan-${{ github.head_ref }}
+  cancel-in-progress: true
+
+env:
+  AWS_REGION: us-east-1
+  TF_IN_AUTOMATION: "true"
+  TF_VERSION: "1.14.4"
+
+jobs:
+  validate:
+    name: Validate
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        stage: [bootstrap, infra, addons]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Terraform fmt
+        working-directory: ${{ matrix.stage }}
+        run: terraform fmt -check -recursive
+
+      # -backend=false: validate não precisa do state, e assim o job não depende
+      # de credencial AWS nem do backend existir.
+      - name: Terraform init
+        working-directory: ${{ matrix.stage }}
+        run: terraform init -backend=false -input=false
+
+      - name: Terraform validate
+        working-directory: ${{ matrix.stage }}
+        run: terraform validate
+
+  security:
+    name: Security
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # O tfsec foi descontinuado e incorporado ao Trivy — "trivy config" roda o
+      # mesmo conjunto de regras, com manutenção ativa.
+      - name: Trivy (IaC misconfiguration)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: config
+          scan-ref: .
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+
+      - name: Checkov
+        uses: bridgecrewio/checkov-action@master
+        with:
+          directory: .
+          framework: terraform
+          quiet: true
+          soft_fail: false
+
+  plan:
+    name: Plan (${{ matrix.stage }})
+    runs-on: ubuntu-latest
+    needs: [validate, security]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - stage: infra
+            required: true
+          # O addons lê do SSM parâmetros que só existem depois do apply do
+          # infra. Num ambiente ainda não provisionado o plan dele falha, e isso
+          # não deve bloquear o PR.
+          - stage: addons
+            required: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Autenticar na AWS (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_OIDC_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Backend config
+        id: backend
+        run: |
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          echo "bucket=togglemaster-iac-tfstate-${ACCOUNT_ID}" >> "$GITHUB_OUTPUT"
+
+      - name: Terraform init
+        working-directory: ${{ matrix.stage }}
+        run: |
+          terraform init -input=false \
+            -backend-config="bucket=${{ steps.backend.outputs.bucket }}" \
+            -backend-config="region=${{ env.AWS_REGION }}" \
+            -backend-config="use_lockfile=true"
+
+      # -lock=false: plan não altera o state, e sem lock um PR não bloqueia outro.
+      - name: Terraform plan
+        id: plan
+        working-directory: ${{ matrix.stage }}
+        continue-on-error: ${{ !matrix.required }}
+        run: |
+          terraform plan -input=false -lock=false -no-color 2>&1 | tee plan.txt
+          exit "${PIPESTATUS[0]}"
+
+      - name: Comentar no PR
+        uses: actions/github-script@v7
+        if: always()
+        with:
+          script: |
+            const fs = require('fs');
+            const stage = '${{ matrix.stage }}';
+            const outcome = '${{ steps.plan.outcome }}';
+
+            let plan = '';
+            try {
+              plan = fs.readFileSync(stage + '/plan.txt', 'utf8');
+            } catch (e) {
+              plan = 'Nenhuma saída de plan — o step não chegou a executar.';
+            }
+
+            // O corpo de um comentário tem limite de 65536 caracteres. O trecho
+            // final é o que interessa (o resumo add/change/destroy).
+            const LIMIT = 60000;
+            if (plan.length > LIMIT) {
+              plan = '...(truncado)...\n' + plan.slice(-LIMIT);
+            }
+
+            const icon = outcome === 'success' ? '✅'
+                       : (outcome === 'failure' && '${{ matrix.required }}' === 'false') ? '⚠️'
+                       : '❌';
+
+            const note = (outcome === 'failure' && '${{ matrix.required }}' === 'false')
+              ? '\n> Falha esperada enquanto o stage `infra` não tiver sido aplicado — o `addons` lê parâmetros do SSM criados por ele.\n'
+              : '';
+
+            const body = [
+              '### ' + icon + ' Terraform plan — `' + stage + '`',
+              note,
+              '<details><summary>Ver plano</summary>',
+              '',
+              '```terraform',
+              plan,
+              '```',
+              '',
+              '</details>',
+            ].join('\n');
+
+            // Atualiza o comentário anterior do mesmo stage em vez de empilhar um
+            // novo a cada push na branch.
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            const previous = comments.find(c =>
+              c.user.type === 'Bot' && c.body.includes('Terraform plan — `' + stage + '`')
+            );
+
+            if (previous) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: previous.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }

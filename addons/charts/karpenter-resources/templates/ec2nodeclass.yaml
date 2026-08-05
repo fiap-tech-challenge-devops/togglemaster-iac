@@ -1,0 +1,29 @@
+apiVersion: karpenter.k8s.aws/v1
+kind: EC2NodeClass
+metadata:
+  name: default
+spec:
+  # Nome, não ARN: o Karpenter monta o instance profile a partir dele.
+  role: {{ .Values.nodeRole }}
+
+  amiSelectorTerms:
+    - alias: {{ .Values.amiAlias }}
+
+  # Descoberta por tag, não por ID. As tags são aplicadas pelo módulo vpc e pelo
+  # módulo eks no stage infra.
+  subnetSelectorTerms:
+    - tags:
+        karpenter.sh/discovery: {{ .Values.clusterName }}
+
+  securityGroupSelectorTerms:
+    - tags:
+        karpenter.sh/discovery: {{ .Values.clusterName }}
+
+  # Sem isto os nós do Karpenter herdam o limite de pods do tipo de instância.
+  # Com prefix delegation ligada no VPC-CNI (stage infra), 110 é aproveitável.
+  kubelet:
+    maxPods: 110
+
+  tags:
+    karpenter.sh/discovery: {{ .Values.clusterName }}
+    ManagedBy: karpenter

@@ -1,0 +1,8 @@
+apiVersion: v2
+name: karpenter-resources
+description: >-
+  NodePool e EC2NodeClass do Karpenter. Existem como chart local porque são CRs
+  de CRDs instaladas no mesmo apply — o provider kubernetes validaria os
+  manifestos no plan, quando as CRDs ainda não existem.
+type: application
+version: 0.1.0
