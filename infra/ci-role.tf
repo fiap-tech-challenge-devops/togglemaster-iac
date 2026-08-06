@@ -20,12 +20,22 @@ data "aws_iam_policy_document" "ci_assume" {
       values   = ["sts.amazonaws.com"]
     }
 
-    # Um StringLike por repositório, em vez de um curinga sobre a organização:
-    # um repositório novo na org não ganha permissão de push por acidente.
+    # Um padrão por repositório, em vez de um curinga sobre a organização: um
+    # repositório novo na org não ganha permissão de push por acidente.
+    #
+    # Os curingas depois da org E depois do repositório não são frouxidão. Esta
+    # organização usa a claim `sub` customizada do GitHub, que injeta os IDs
+    # imutáveis de org e repositório:
+    #
+    #   repo:fiap-tech-challenge-devops@283760261/auth-service@1314140933:ref:refs/heads/main
+    #
+    # O padrão clássico "repo:<org>/<repo>:*" não casa com isso — o sufixo @<id>
+    # aparece ANTES da barra, onde o curinga final não alcança. Os IDs não são
+    # fixados literalmente porque mudariam se um repositório fosse recriado.
     condition {
       test     = "StringLike"
       variable = "token.actions.githubusercontent.com:sub"
-      values   = [for s in local.services : "repo:${var.github_org}/${s}:*"]
+      values   = [for s in local.services : "repo:${var.github_org}*/${s}*"]
     }
   }
 }

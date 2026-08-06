@@ -16,7 +16,7 @@ resource "random_password" "rds" {
 # Nome previsível (<system>/rds/<serviço>) porque o ExternalSecret no repositório
 # GitOps referencia essa string. Mudar o padrão aqui quebra o deploy lá.
 module "rds_secret" {
-  source   = "${local.modules}//secrets-manager?ref=${var.module_ref}"
+  source   = "github.com/fiap-tech-challenge-devops/terraform-aws-modules//secrets-manager?ref=v0.1.0"
   for_each = local.rds_instances
 
   name        = "${var.system}/rds/${each.key}"

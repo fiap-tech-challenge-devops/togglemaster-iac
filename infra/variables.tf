@@ -10,12 +10,6 @@ variable "system" {
   default     = "togglemaster"
 }
 
-variable "module_ref" {
-  description = "Tag da biblioteca terraform-aws-modules consumida por este stage. Fixar em tag, e não em main, impede que um commit na biblioteca altere o plano daqui sem uma mudança explícita neste repositório."
-  type        = string
-  default     = "v0.1.0"
-}
-
 variable "admin_iam_arns" {
   description = "Principals IAM que recebem acesso cluster-admin no EKS, além da role da esteira. Sem o seu usuário aqui, o kubectl local não autentica no cluster."
   type        = list(string)

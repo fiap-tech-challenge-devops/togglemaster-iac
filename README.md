@@ -62,7 +62,7 @@ A role precisa de uma trust policy federada ao OIDC do GitHub, restrita a este r
     "Action": "sts:AssumeRoleWithWebIdentity",
     "Condition": {
       "StringEquals": { "token.actions.githubusercontent.com:aud": "sts.amazonaws.com" },
-      "StringLike":   { "token.actions.githubusercontent.com:sub": "repo:fiap-tech-challenge-devops/togglemaster-iac:*" }
+      "StringLike":   { "token.actions.githubusercontent.com:sub": "repo:fiap-tech-challenge-devops*/togglemaster-iac*" }
     }
   }]
 }
@@ -71,6 +71,28 @@ A role precisa de uma trust policy federada ao OIDC do GitHub, restrita a este r
 O ARN dela vai no secret `AWS_OIDC_ROLE_ARN_VITAO` do repositório.
 
 > A condição `sub` é o que impede qualquer outro repositório do GitHub de assumir a role. Sem ela, o `aud` sozinho autorizaria o mundo inteiro.
+
+### Por que os curingas depois da org e do repositório
+
+Esta organização usa a claim `sub` customizada do GitHub, que injeta os IDs imutáveis de organização e repositório:
+
+```
+repo:fiap-tech-challenge-devops@283760261/togglemaster-iac@1314140933:ref:refs/heads/main
+```
+
+O padrão clássico `repo:<org>/<repo>:*` **não casa** com isso: o sufixo `@<id>` aparece antes da barra, onde o curinga final não alcança. O sintoma é `Not authorized to perform sts:AssumeRoleWithWebIdentity`, com a trust policy parecendo correta à primeira vista.
+
+Os IDs não são fixados literalmente porque mudariam se um repositório fosse recriado.
+
+Se precisar diagnosticar de novo, a claim que chegou de fato está no CloudTrail:
+
+```bash
+aws cloudtrail lookup-events \
+  --lookup-attributes AttributeKey=EventName,AttributeValue=AssumeRoleWithWebIdentity \
+  --max-results 1 --query 'Events[0].CloudTrailEvent' --output text
+```
+
+O campo `userIdentity.principalId` traz a `sub` exata que o GitHub enviou.
 
 Em permissões, `AdministratorAccess` resolve para este escopo — o stage `infra` cria VPC, EKS, RDS, IAM e ECR, e o conjunto mínimo para isso já se aproxima de admin.
 

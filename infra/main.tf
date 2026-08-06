@@ -1,8 +1,13 @@
 data "aws_caller_identity" "current" {}
 
+# Os módulos vêm da biblioteca terraform-aws-modules, sempre fixados numa TAG.
+#
+# O `source` é escrito por extenso em cada bloco porque o Terraform exige string
+# literal ali — nem variável, nem local, nem interpolação. Isso é intencional do
+# Terraform: o `init` precisa resolver os módulos antes de avaliar qualquer
+# expressão. Para subir de versão, é find/replace de `?ref=v0.1.0` neste diretório.
 locals {
   cluster_name = "eks-${var.system}"
-  modules      = "github.com/fiap-tech-challenge-devops/terraform-aws-modules"
 
   tags = {
     System = var.system
@@ -27,7 +32,7 @@ locals {
 
 # ── Rede ──────────────────────────────────────────────────────────────────────
 module "vpc" {
-  source = "${local.modules}//vpc?ref=${var.module_ref}"
+  source = "github.com/fiap-tech-challenge-devops/terraform-aws-modules//vpc?ref=v0.1.0"
 
   name       = var.system
   cidr_block = var.vpc_cidr
@@ -57,7 +62,7 @@ module "vpc" {
 
 # ── EKS ───────────────────────────────────────────────────────────────────────
 module "eks" {
-  source = "${local.modules}//eks?ref=${var.module_ref}"
+  source = "github.com/fiap-tech-challenge-devops/terraform-aws-modules//eks?ref=v0.1.0"
 
   cluster_name    = local.cluster_name
   cluster_version = var.cluster_version
@@ -128,7 +133,7 @@ module "eks" {
 # os recursos AWS: role dos nós, IRSA do controller, fila de interrupção e as
 # regras do EventBridge que a alimentam.
 module "karpenter" {
-  source = "${local.modules}//eks-karpenter?ref=${var.module_ref}"
+  source = "github.com/fiap-tech-challenge-devops/terraform-aws-modules//eks-karpenter?ref=v0.1.0"
 
   cluster_name      = module.eks.cluster_name
   oidc_provider_arn = module.eks.oidc_provider_arn
@@ -143,7 +148,7 @@ module "karpenter" {
 
 # ── AWS Load Balancer Controller: plano AWS ──────────────────────────────────
 module "lb_controller" {
-  source = "${local.modules}//eks-aws-lb-controller?ref=${var.module_ref}"
+  source = "github.com/fiap-tech-challenge-devops/terraform-aws-modules//eks-aws-lb-controller?ref=v0.1.0"
 
   cluster_name      = module.eks.cluster_name
   oidc_provider_arn = module.eks.oidc_provider_arn
@@ -159,7 +164,7 @@ module "lb_controller" {
 
 # ── RDS PostgreSQL × 3 ────────────────────────────────────────────────────────
 module "rds" {
-  source   = "${local.modules}//rds?ref=${var.module_ref}"
+  source   = "github.com/fiap-tech-challenge-devops/terraform-aws-modules//rds?ref=v0.1.0"
   for_each = local.rds_instances
 
   name                = "rds-${var.system}-${each.key}"
@@ -198,7 +203,7 @@ module "rds" {
 
 # ── ElastiCache Redis ─────────────────────────────────────────────────────────
 module "redis" {
-  source = "${local.modules}//elasticache?ref=${var.module_ref}"
+  source = "github.com/fiap-tech-challenge-devops/terraform-aws-modules//elasticache?ref=v0.1.0"
 
   name                = "redis-${var.system}"
   security_group_name = "redis-sg-${var.system}"
@@ -223,7 +228,7 @@ module "redis" {
 
 # ── SQS ───────────────────────────────────────────────────────────────────────
 module "sqs" {
-  source = "${local.modules}//sqs?ref=${var.module_ref}"
+  source = "github.com/fiap-tech-challenge-devops/terraform-aws-modules//sqs?ref=v0.1.0"
 
   name                      = "${var.system}-evaluation-events"
   receive_wait_time_seconds = 20 # long polling: menos chamadas vazias, menos custo
@@ -235,7 +240,7 @@ module "sqs" {
 
 # ── DynamoDB ──────────────────────────────────────────────────────────────────
 module "dynamodb" {
-  source = "${local.modules}//dynamodb?ref=${var.module_ref}"
+  source = "github.com/fiap-tech-challenge-devops/terraform-aws-modules//dynamodb?ref=v0.1.0"
 
   name         = "ToggleMasterAnalytics"
   hash_key     = "event_id"
@@ -250,7 +255,7 @@ module "dynamodb" {
 
 # ── ECR ───────────────────────────────────────────────────────────────────────
 module "ecr" {
-  source = "${local.modules}//ecr?ref=${var.module_ref}"
+  source = "github.com/fiap-tech-challenge-devops/terraform-aws-modules//ecr?ref=v0.1.0"
 
   namespace        = var.system
   repository_names = local.services

@@ -29,7 +29,7 @@ data "aws_iam_policy_document" "apps" {
 }
 
 module "irsa_apps" {
-  source = "${local.modules}//iam-irsa?ref=${var.module_ref}"
+  source = "github.com/fiap-tech-challenge-devops/terraform-aws-modules//iam-irsa?ref=v0.1.0"
 
   name              = "role-eks-${var.system}-apps"
   oidc_provider_arn = module.eks.oidc_provider_arn
@@ -63,7 +63,7 @@ data "aws_iam_policy_document" "eso" {
 }
 
 module "irsa_eso" {
-  source = "${local.modules}//iam-irsa?ref=${var.module_ref}"
+  source = "github.com/fiap-tech-challenge-devops/terraform-aws-modules//iam-irsa?ref=v0.1.0"
 
   name              = "role-eks-${var.system}-external-secrets"
   oidc_provider_arn = module.eks.oidc_provider_arn
@@ -92,7 +92,7 @@ data "aws_iam_policy_document" "keda" {
 }
 
 module "irsa_keda" {
-  source = "${local.modules}//iam-irsa?ref=${var.module_ref}"
+  source = "github.com/fiap-tech-challenge-devops/terraform-aws-modules//iam-irsa?ref=v0.1.0"
 
   name              = "role-eks-${var.system}-keda"
   oidc_provider_arn = module.eks.oidc_provider_arn
