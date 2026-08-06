@@ -83,7 +83,9 @@ jobs:
         with:
           scan-type: config
           scan-ref: .
-          severity: HIGH,CRITICAL
+          # A severidade e o exclude-downloaded-modules ficam em trivy.yaml — a
+          # action não expõe a segunda como input, e separar as duas confundiria.
+          trivy-config: trivy.yaml
           exit-code: "1"
 
       # As releases do checkov-action pararam em 2022, mas as TAGS continuam

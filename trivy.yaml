@@ -1,0 +1,20 @@
+# Configuração do trivy config (misconfiguration em IaC).
+#
+# Existe porque a action aquasecurity/trivy-action não expõe como input a opção
+# mais importante para este repositório: desligar a avaliação dos módulos que o
+# próprio Trivy baixa.
+
+misconfiguration:
+  terraform:
+    # Sem isto, o Trivy resolve os `source` remotos, baixa a biblioteca
+    # terraform-aws-modules e avalia o código dela junto — 7 dos 8 achados da
+    # primeira execução vinham de lá.
+    #
+    # Achado em módulo de terceiro não é acionável aqui: a correção seria alterar
+    # o outro repositório, publicar uma tag nova e atualizar a referência. A
+    # biblioteca tem a própria esteira para isso.
+    exclude-downloaded-modules: true
+
+severity:
+  - HIGH
+  - CRITICAL

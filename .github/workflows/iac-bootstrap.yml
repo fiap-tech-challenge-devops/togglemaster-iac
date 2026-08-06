@@ -1,11 +1,12 @@
 name: IaC — Bootstrap (backend S3)
 
 # Resolve o ovo-e-galinha do state remoto: o bucket que guarda o tfstate não pode
-# guardar o state que o cria. Este stage roda com state LOCAL e o resultado é
-# descartável — a partir daqui, infra e addons usam o backend remoto.
+# guardar o state que o cria.
 #
-# Executado uma única vez na vida do projeto. O job é idempotente: se o bucket já
-# existe, ele não faz nada.
+# A saída é o bootstrap MIGRAR o próprio state para o bucket que acabou de criar.
+# Na primeira execução ele roda com state local; a partir da segunda usa backend
+# remoto como qualquer outro stage — e converge normalmente, aplicando mudanças
+# futuras neste diretório.
 
 on:
   workflow_dispatch:
@@ -23,14 +24,18 @@ permissions:
   id-token: write
   contents: read
 
+# Grupo próprio: o bootstrap tem state independente e não disputa recurso com
+# apply/destroy. Compartilhar o grupo com eles fazia o bootstrap ficar preso na
+# fila atrás de um apply parado no gate de aprovação.
 concurrency:
-  group: iac-${{ github.ref }}
+  group: iac-bootstrap-${{ github.ref }}
   cancel-in-progress: false
 
 env:
   AWS_REGION: ${{ inputs.region }}
   TF_IN_AUTOMATION: "true"
   TF_VERSION: "1.15.8"
+  STATE_KEY: togglemaster/bootstrap.tfstate
 
 jobs:
   bootstrap:
@@ -56,43 +61,127 @@ jobs:
         with:
           terraform_version: ${{ env.TF_VERSION }}
 
-      - name: Verificar se o backend já existe
-        id: check
+      - name: Descobrir o estado atual
+        id: state
         run: |
+          set -euo pipefail
           ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
           BUCKET="togglemaster-iac-tfstate-${ACCOUNT_ID}"
           echo "bucket=${BUCKET}" >> "$GITHUB_OUTPUT"
 
-          if aws s3api head-bucket --bucket "$BUCKET" 2>/dev/null; then
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-            echo "Bucket ${BUCKET} já existe — nada a fazer."
+          # Três cenários possíveis, e o fluxo muda em cada um.
+          if aws s3api head-object --bucket "$BUCKET" --key "$STATE_KEY" >/dev/null 2>&1; then
+            echo "mode=remote" >> "$GITHUB_OUTPUT"
+            echo "State já vive no bucket — execução normal, com backend remoto."
+          elif aws s3api head-bucket --bucket "$BUCKET" >/dev/null 2>&1; then
+            echo "mode=adopt" >> "$GITHUB_OUTPUT"
+            echo "Bucket existe mas não há state do bootstrap — importar e migrar."
           else
-            echo "exists=false" >> "$GITHUB_OUTPUT"
-            echo "Bucket ${BUCKET} não existe — será criado."
+            echo "mode=create" >> "$GITHUB_OUTPUT"
+            echo "Nada existe — criar do zero e migrar."
           fi
 
-      - name: Terraform init (state local)
-        if: steps.check.outputs.exists == 'false'
+      # O backend.tf não é versionado: ele precisa ESTAR AUSENTE na primeira
+      # execução (o bucket que ele aponta é o que vamos criar) e presente nas
+      # demais. Gerar aqui deixa isso explícito, em vez de depender do
+      # comportamento de `init -backend=false` com um bloco de backend no repo.
+      - name: Gerar backend.tf
+        if: steps.state.outputs.mode == 'remote'
+        working-directory: bootstrap
+        run: |
+          cat > backend.tf <<EOF
+          terraform {
+            backend "s3" {
+              bucket       = "${{ steps.state.outputs.bucket }}"
+              key          = "${{ env.STATE_KEY }}"
+              region       = "${{ env.AWS_REGION }}"
+              use_lockfile = true
+            }
+          }
+          EOF
+
+      # ── Caminho normal: o state já está no S3 ───────────────────────────────
+      - name: Terraform init (backend remoto)
+        if: steps.state.outputs.mode == 'remote'
         working-directory: bootstrap
         run: terraform init -input=false
 
+      # ── Primeira execução, ou adoção de um bucket preexistente ──────────────
+      - name: Terraform init (state local)
+        if: steps.state.outputs.mode != 'remote'
+        working-directory: bootstrap
+        run: terraform init -input=false
+
+      # Sem isto, um bucket preexistente faz o apply falhar com
+      # BucketAlreadyOwnedByYou. O import traz os recursos para o state em vez de
+      # tentar recriá-los. Os quatro recursos de bucket usam o nome como ID.
+      - name: Adotar recursos preexistentes
+        if: steps.state.outputs.mode == 'adopt'
+        working-directory: bootstrap
+        env:
+          BUCKET: ${{ steps.state.outputs.bucket }}
+        run: |
+          set -uo pipefail
+          for addr in \
+            aws_s3_bucket.tfstate \
+            aws_s3_bucket_versioning.tfstate \
+            aws_s3_bucket_server_side_encryption_configuration.tfstate \
+            aws_s3_bucket_public_access_block.tfstate
+          do
+            echo "importando $addr"
+            # || true: se o recurso não existir na AWS, o apply seguinte o cria.
+            terraform import -input=false "$addr" "$BUCKET" || true
+          done
+
       - name: Terraform apply
-        if: steps.check.outputs.exists == 'false'
+        if: steps.state.outputs.mode != 'remote'
+        working-directory: bootstrap
+        run: terraform apply -input=false -auto-approve
+
+      # Move o state local para dentro do bucket recém-criado. Depois disto o
+      # stage deixa de ser especial: as próximas execuções entram pelo caminho
+      # "remote" acima.
+      - name: Migrar o state para o S3
+        if: steps.state.outputs.mode != 'remote'
+        working-directory: bootstrap
+        run: |
+          cat > backend.tf <<EOF
+          terraform {
+            backend "s3" {
+              bucket       = "${{ steps.state.outputs.bucket }}"
+              key          = "${{ env.STATE_KEY }}"
+              region       = "${{ env.AWS_REGION }}"
+              use_lockfile = true
+            }
+          }
+          EOF
+          # -force-copy: copia o state local para o S3 sem perguntar. Sem a flag,
+          # o Terraform abre um prompt interativo e o job trava até o timeout.
+          terraform init -input=false -force-copy
+
+      # Roda sempre, inclusive logo após a migração: é o apply que converge o
+      # diretório e prova que o state remoto está consistente.
+      - name: Terraform apply (converge)
         working-directory: bootstrap
         run: terraform apply -input=false -auto-approve
 
       - name: Resumo
+        if: always()
         run: |
           {
             echo "### Backend remoto"
             echo ""
-            echo "- Bucket: \`${{ steps.check.outputs.bucket }}\`"
-            echo "- Região: \`${{ env.AWS_REGION }}\`"
-            echo "- Lock: arquivo no próprio S3 (\`use_lockfile\`), sem tabela DynamoDB"
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Bucket | \`${{ steps.state.outputs.bucket }}\` |"
+            echo "| State do bootstrap | \`${{ env.STATE_KEY }}\` |"
+            echo "| Região | \`${{ env.AWS_REGION }}\` |"
+            echo "| Lock | arquivo no próprio S3 (\`use_lockfile\`) |"
+            echo "| Caminho desta execução | \`${{ steps.state.outputs.mode }}\` |"
             echo ""
-            if [ "${{ steps.check.outputs.exists }}" = "true" ]; then
-              echo "Já existia — nenhuma alteração."
-            else
-              echo "Criado agora. O state local deste stage é descartável."
-            fi
+            case "${{ steps.state.outputs.mode }}" in
+              remote) echo "State já era remoto — execução de convergência." ;;
+              adopt)  echo "Bucket preexistente adotado por import, state migrado para o S3." ;;
+              create) echo "Bucket criado do zero, state migrado para o S3." ;;
+            esac
           } >> "$GITHUB_STEP_SUMMARY"

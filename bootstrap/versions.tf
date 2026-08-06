@@ -8,10 +8,15 @@ terraform {
     }
   }
 
-  # Sem bloco backend: este stage roda com state LOCAL, porque é ele que cria o
-  # bucket onde os demais stages guardam o state. O state gerado aqui é
-  # descartável — o workflow iac-bootstrap.yml verifica a existência do bucket
-  # antes de aplicar, então reexecutar sem o state não recria nada.
+  # Sem bloco backend versionado, de propósito.
+  #
+  # Na primeira execução o backend S3 ainda não pode existir — o bucket dele é o
+  # que este stage cria. Depois do apply, o workflow gera um backend.tf e roda
+  # `terraform init -force-copy`, migrando o state para o bucket. Da segunda
+  # execução em diante o stage usa backend remoto como qualquer outro, e
+  # converge normalmente.
+  #
+  # O backend.tf gerado é ignorado pelo git (ver .gitignore).
 }
 
 provider "aws" {

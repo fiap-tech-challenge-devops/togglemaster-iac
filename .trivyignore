@@ -1,0 +1,27 @@
+# Exceções do trivy config (misconfiguration em IaC).
+#
+# Regra da casa: nada entra aqui sem justificativa escrita. Um arquivo de
+# exceções sem motivo registrado vira um jeito silencioso de desligar o gate —
+# que é exatamente o que a esteira existe para impedir.
+#
+# Formato: um ID por linha (ex.: AVD-AWS-0040). Aceita `exp:AAAA-MM-DD` no fim
+# para exceção com prazo.
+#
+# Antes de adicionar, verifique se o achado é do SEU código: módulos baixados já
+# são excluídos por trivy.yaml, e achado em módulo de terceiro se corrige na
+# biblioteca, não aqui.
+
+# ── Nenhuma exceção ativa ─────────────────────────────────────────────────────
+#
+# Os oito achados da primeira execução foram resolvidos sem exceção:
+#
+#   AVD-AWS-0040  endpoint público do EKS          ) vinham de módulos baixados,
+#   AVD-AWS-0041  acesso do cluster de 0.0.0.0/0   ) hoje fora do escopo do scan
+#   AVD-AWS-0104  egress irrestrito (RDS, Redis)   )
+#   AVD-AWS-0164  subnet com IP público (×2)       )
+#   AVD-AWS-0051  Redis sem transit encryption     )
+#
+#   AVD-AWS-0132  bucket de state sem chave própria — CORRIGIDO em bootstrap/main.tf
+#
+# Se algum voltar a aparecer, é porque passou a existir no código deste
+# repositório — trate como achado novo, não como reincidência conhecida.

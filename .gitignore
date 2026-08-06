@@ -10,6 +10,11 @@ plan.txt
 *.tfstate
 *.tfstate.*
 
+# Gerado pelo workflow iac-bootstrap: o stage precisa rodar SEM backend na
+# primeira execução (o bucket que ele aponta é o que está sendo criado) e COM
+# backend nas seguintes. Versionar quebraria a primeira execução numa conta nova.
+bootstrap/backend.tf
+
 *.tfvars
 !*.tfvars.example
 
