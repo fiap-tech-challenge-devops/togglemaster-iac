@@ -75,16 +75,21 @@ jobs:
 
       # O tfsec foi descontinuado e incorporado ao Trivy — "trivy config" roda o
       # mesmo conjunto de regras, com manutenção ativa.
+      #
+      # Versões fixadas em tag, nunca em branch: uma esteira que existe para
+      # barrar vulnerabilidade não deveria executar código que muda sozinho.
       - name: Trivy (IaC misconfiguration)
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: config
           scan-ref: .
           severity: HIGH,CRITICAL
           exit-code: "1"
 
+      # As releases do checkov-action pararam em 2022, mas as TAGS continuam
+      # saindo — por isso a referência é a uma tag e não a @master.
       - name: Checkov
-        uses: bridgecrewio/checkov-action@master
+        uses: bridgecrewio/checkov-action@v12.3115.0
         with:
           directory: .
           framework: terraform
