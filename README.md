@@ -42,9 +42,41 @@ infra/        # rede, cluster, bancos, mensageria, registry, identidades
 addons/       # componentes que rodam dentro do cluster, incluindo o Argo CD
 ```
 
+## Pré-requisitos manuais
+
+Duas coisas precisam existir **antes** de qualquer esteira rodar, e não são criadas por este repositório:
+
+| Recurso | Por quê é manual |
+|---|---|
+| OIDC provider do GitHub na conta AWS | É por conta, não por projeto. Vários repositórios federam pelo mesmo provider |
+| IAM role assumida pelas esteiras | Circular: a esteira precisaria assumir a role para poder criá-la |
+
+A role precisa de uma trust policy federada ao OIDC do GitHub, restrita a este repositório:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Principal": { "Federated": "arn:aws:iam::<ACCOUNT_ID>:oidc-provider/token.actions.githubusercontent.com" },
+    "Action": "sts:AssumeRoleWithWebIdentity",
+    "Condition": {
+      "StringEquals": { "token.actions.githubusercontent.com:aud": "sts.amazonaws.com" },
+      "StringLike":   { "token.actions.githubusercontent.com:sub": "repo:fiap-tech-challenge-devops/togglemaster-iac:*" }
+    }
+  }]
+}
+```
+
+O ARN dela vai no secret `AWS_OIDC_ROLE_ARN_VITAO` do repositório.
+
+> A condição `sub` é o que impede qualquer outro repositório do GitHub de assumir a role. Sem ela, o `aud` sozinho autorizaria o mundo inteiro.
+
+Em permissões, `AdministratorAccess` resolve para este escopo — o stage `infra` cria VPC, EKS, RDS, IAM e ECR, e o conjunto mínimo para isso já se aproxima de admin.
+
 ### Por que três stages
 
-**`bootstrap`** resolve o ovo-e-galinha do state: o bucket S3 que guarda o `tfstate` não pode guardar o state que o cria. Roda uma vez, com state local, e o resultado é descartável — a partir daí os demais stages usam o backend remoto.
+**`bootstrap`** resolve o ovo-e-galinha do state: o bucket S3 que guarda o `tfstate` não pode guardar o state que o cria. Roda uma vez, com state local, e o resultado é descartável — a partir daí os demais stages usam o backend remoto. É o único recurso deste stage; a identidade das esteiras é pré-requisito manual, pelo motivo acima.
 
 **`infra`** usa apenas o provider `aws` e cabe em um único apply. Isso inclui o plano AWS do Karpenter e do Load Balancer Controller (IAM, IRSA, SQS, EventBridge), que vêm dos módulos `eks-karpenter` e `eks-aws-lb-controller` da biblioteca.
 
