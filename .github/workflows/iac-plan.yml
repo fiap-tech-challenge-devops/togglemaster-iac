@@ -1,7 +1,7 @@
-name: IaC — Plan (Pull Request)
+name: IaC — Plan
 
-# Roda em PR para revisão. O plano gerado aqui é DESCARTADO: não vira artifact e
-# não é reaplicado depois.
+# Plano para revisão. O resultado é DESCARTADO: não vira artifact e não é
+# reaplicado depois.
 #
 # Dois motivos. O arquivo de plano contém todos os valores dos atributos em texto
 # claro, inclusive os sensíveis (senha do RDS, conteúdo do Secrets Manager) — um
@@ -11,8 +11,18 @@ name: IaC — Plan (Pull Request)
 # O apply replaneja no próprio run. Ver iac-apply.yml.
 
 on:
-  pull_request:
-    branches: [main]
+  # FASE DE TESTES: gatilho por PR desligado para o plano rodar só quando você
+  # pedir. Reative quando a esteira estiver estável — em PR ele comenta o plano
+  # no próprio pull request, que é o fluxo de revisão pretendido.
+  #
+  # pull_request:
+  #   branches: [main]
+  workflow_dispatch:
+    inputs:
+      region:
+        description: "Região AWS"
+        type: string
+        default: us-east-1
 
 permissions:
   id-token: write
@@ -20,11 +30,12 @@ permissions:
   pull-requests: write
 
 concurrency:
-  group: iac-plan-${{ github.head_ref }}
+  # head_ref só existe em pull_request; em disparo manual cai para o ref da branch.
+  group: iac-plan-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
 
 env:
-  AWS_REGION: us-east-1
+  AWS_REGION: ${{ inputs.region || 'us-east-1' }}
   TF_IN_AUTOMATION: "true"
   TF_VERSION: "1.15.8"
 
@@ -131,9 +142,27 @@ jobs:
           terraform plan -input=false -lock=false -no-color 2>&1 | tee plan.txt
           exit "${PIPESTATUS[0]}"
 
+      # Em disparo manual não há PR para comentar — o plano vai para o resumo do run.
+      - name: Resumo do plano
+        if: always()
+        run: |
+          {
+            echo "### Terraform plan — \`${{ matrix.stage }}\` (${{ steps.plan.outcome }})"
+            echo ""
+            echo '<details><summary>Ver plano</summary>'
+            echo ""
+            echo '```terraform'
+            # tail: o resumo add/change/destroy fica no fim, e o corpo do summary
+            # tem limite de 1 MB.
+            tail -c 900000 "${{ matrix.stage }}/plan.txt" 2>/dev/null || echo "sem saída de plan"
+            echo '```'
+            echo ""
+            echo '</details>'
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Comentar no PR
         uses: actions/github-script@v7
-        if: always()
+        if: always() && github.event_name == 'pull_request'
         with:
           script: |
             const fs = require('fs');

@@ -9,12 +9,17 @@ name: IaC — Apply (infra → addons)
 # `environment: production` também no job addons.
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "infra/**"
-      - "addons/**"
-      - ".github/workflows/iac-apply.yml"
+  # FASE DE TESTES: gatilho automático desligado para o apply não disparar a cada
+  # push na main — ele fica preso no gate de aprovação e segura o grupo de
+  # concorrência, bloqueando bootstrap e destroy na fila.
+  # Reative quando a esteira estiver estável.
+  #
+  # push:
+  #   branches: [main]
+  #   paths:
+  #     - "infra/**"
+  #     - "addons/**"
+  #     - ".github/workflows/iac-apply.yml"
   workflow_dispatch:
     inputs:
       region:
