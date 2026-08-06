@@ -17,9 +17,9 @@ variable "module_ref" {
 }
 
 variable "admin_iam_arns" {
-  description = "Principals IAM que recebem acesso cluster-admin no EKS, além da role da esteira. Informe seu usuário para conseguir usar kubectl na máquina local."
+  description = "Principals IAM que recebem acesso cluster-admin no EKS, além da role da esteira. Sem o seu usuário aqui, o kubectl local não autentica no cluster."
   type        = list(string)
-  default     = []
+  default     = ["arn:aws:iam::762103020993:user/vitor.aws"]
 }
 
 # ── Rede ──────────────────────────────────────────────────────────────────────
