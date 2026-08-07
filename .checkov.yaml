@@ -1,0 +1,66 @@
+# Configuração do Checkov.
+#
+# Mesma regra do .trivyignore: nada entra em skip-check sem justificativa
+# escrita. Um arquivo de exceções sem motivo registrado vira um jeito silencioso
+# de desligar o gate — que é o oposto do que a esteira existe para fazer.
+#
+# A análise completa que originou estas decisões está em
+# docs/desafios/03-devsecops-iac.md.
+
+framework:
+  - terraform
+
+quiet: true
+compact: true
+
+skip-check:
+  # ── Regras cuja premissa não se aplica a este repositório ──────────────────
+
+  # CKV_TF_1 — "módulo deve usar commit hash em vez de tag"
+  #
+  # 17 dos 34 achados. A regra existe para consumo de módulo de terceiro, onde
+  # uma tag pode ser movida sob os seus pés. A biblioteca é da própria
+  # organização e as tags são imutáveis por convenção (ver README da biblioteca).
+  #
+  # Trocar por hash tornaria os 11 `source` ilegíveis e faria "subir de versão"
+  # deixar de ser rastreável no diff.
+  - CKV_TF_1
+
+  # CKV2_AWS_34 — "SSM Parameter deve ser SecureString"
+  #
+  # 8 achados, todos em ssm-exports.tf. O conteúdo é nome de cluster, ID de VPC,
+  # ARN de OIDC provider, URL de registry e versão de chart. Nada é segredo — o
+  # ARN da role IRSA, por exemplo, fica visível numa annotation de ServiceAccount
+  # dentro do cluster.
+  #
+  # SecureString obrigaria kms:Decrypt em toda leitura, incluindo a do stage
+  # addons, acoplando mais sem proteger nada.
+  - CKV2_AWS_34
+
+  # ── Fora de escopo para um ambiente de laboratório ─────────────────────────
+
+  # CKV2_AWS_57 — "Secrets Manager com rotação automática"
+  #
+  # Rotação exige uma Lambda que saiba trocar a credencial na aplicação e no
+  # banco de forma coordenada. É trabalho real, não configuração, e os segredos
+  # aqui são recriados a cada ciclo de destroy/apply do ambiente.
+  - CKV2_AWS_57
+
+  # CKV_AWS_18 — "bucket com access logging"
+  #
+  # Logging de acesso exige um segundo bucket para receber os logs, que por sua
+  # vez dispara as mesmas regras deste (logging, lifecycle, replicação). O acesso
+  # ao state já é auditável pelo CloudTrail via a KMS key dedicada.
+  - CKV_AWS_18
+
+  # CKV2_AWS_62 — "bucket com event notifications"
+  #
+  # Notificação serve para disparar processamento a cada objeto novo. Não há
+  # consumidor: ninguém reage a uma escrita de tfstate.
+  - CKV2_AWS_62
+
+  # CKV_AWS_144 — "bucket com replicação cross-region"
+  #
+  # Replicação protege contra perda de uma região inteira. O ambiente todo vive
+  # em us-east-1: se a região cair, o state replicado não reconstrói nada.
+  - CKV_AWS_144

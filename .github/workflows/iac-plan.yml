@@ -94,8 +94,10 @@ jobs:
         uses: bridgecrewio/checkov-action@v12.3115.0
         with:
           directory: .
-          framework: terraform
-          quiet: true
+          # framework, quiet e as exceções ficam em .checkov.yaml. Manter as
+          # exceções num arquivo dedicado, e não como skip_check aqui, é o que
+          # permite justificar cada uma por escrito ao lado da regra.
+          config_file: .checkov.yaml
           soft_fail: false
 
   plan:

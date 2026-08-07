@@ -38,8 +38,53 @@ resource "aws_kms_key" "tfstate" {
   description             = "Criptografia do state remoto do ${var.system}"
   enable_key_rotation     = true
   deletion_window_in_days = 30
+  policy                  = data.aws_iam_policy_document.tfstate_key.json
 
   tags = { Name = "${var.system}-iac-tfstate" }
+}
+
+# Sem policy explícita, o KMS aplica a padrão, que delega TODA a decisão ao IAM
+# da conta. Declarar a policy torna o controle visível e versionado.
+#
+# A primeira declaração é obrigatória: sem delegar ao root da conta, a chave fica
+# órfã — nem o administrador consegue alterá-la depois, e a única saída é abrir
+# chamado na AWS.
+data "aws_iam_policy_document" "tfstate_key" {
+  statement {
+    sid       = "PermiteAdministracaoPelaConta"
+    effect    = "Allow"
+    actions   = ["kms:*"]
+    resources = ["*"]
+
+    principals {
+      type        = "AWS"
+      identifiers = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"]
+    }
+  }
+
+  # O S3 precisa gerar e decifrar a chave de dados a cada leitura e escrita de
+  # state. A condição de ViaService restringe o uso ao S3 desta região.
+  statement {
+    sid    = "PermiteUsoPeloS3"
+    effect = "Allow"
+    actions = [
+      "kms:Decrypt",
+      "kms:GenerateDataKey",
+      "kms:DescribeKey",
+    ]
+    resources = ["*"]
+
+    principals {
+      type        = "AWS"
+      identifiers = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "kms:ViaService"
+      values   = ["s3.${var.region}.amazonaws.com"]
+    }
+  }
 }
 
 resource "aws_kms_alias" "tfstate" {
@@ -60,6 +105,33 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "tfstate" {
     # gravado a cada plan e apply — a bucket key reduz isso a uma chamada por
     # período, cortando custo e risco de throttling.
     bucket_key_enabled = true
+  }
+}
+
+# O versionamento acima guarda uma versão a cada escrita de state — e há uma por
+# plan e por apply. Sem expiração, isso cresce para sempre.
+#
+# 90 dias é folgado de propósito: a versão anterior do state é a rede de
+# segurança para recuperar um apply interrompido, e não se descobre que precisa
+# dela no mesmo dia.
+resource "aws_s3_bucket_lifecycle_configuration" "tfstate" {
+  bucket = aws_s3_bucket.tfstate.id
+
+  rule {
+    id     = "expirar-versoes-antigas"
+    status = "Enabled"
+
+    filter {}
+
+    noncurrent_version_expiration {
+      noncurrent_days = 90
+    }
+
+    # Upload de state interrompido deixa partes órfãs que são cobradas e não
+    # aparecem na listagem do bucket.
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 7
+    }
   }
 }
 

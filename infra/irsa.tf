@@ -50,6 +50,7 @@ module "irsa_apps" {
 # as connection strings dos RDS aos pods.
 data "aws_iam_policy_document" "eso" {
   statement {
+    sid    = "LerSegredosDoSistema"
     effect = "Allow"
     actions = [
       "secretsmanager:GetSecretValue",
@@ -59,6 +60,16 @@ data "aws_iam_policy_document" "eso" {
     # Escopado ao prefixo do sistema: o operador não enxerga segredos de outros
     # sistemas que compartilhem a conta.
     resources = ["arn:aws:secretsmanager:${var.region}:${data.aws_caller_identity.current.account_id}:secret:${var.system}/*"]
+  }
+
+  # Os segredos usam chave própria (ver secrets.tf). Permissão em secretsmanager
+  # não basta: sem kms:Decrypt na chave, o GetSecretValue devolve AccessDenied
+  # citando o KMS, e o sintoma aparece como ExternalSecret preso em SecretSyncedError.
+  statement {
+    sid       = "DecifrarComAChaveDoSistema"
+    effect    = "Allow"
+    actions   = ["kms:Decrypt", "kms:DescribeKey"]
+    resources = [aws_kms_key.app_secrets.arn]
   }
 }
 

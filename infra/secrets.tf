@@ -1,3 +1,26 @@
+# ── Chave dos segredos de aplicação ───────────────────────────────────────────
+# Uma chave para os cinco segredos (3 do RDS + 2 de aplicação), e não a padrão do
+# Secrets Manager.
+#
+# Com a chave gerenciada pela AWS, qualquer principal com permissão de
+# secretsmanager na conta lê o conteúdo. Com chave própria, o acesso passa também
+# pela key policy e cada uso aparece no CloudTrail com o ARN de quem leu.
+#
+# Uma chave só, e não uma por segredo: KMS cobra por chave por mês, e todos aqui
+# pertencem ao mesmo sistema — não há isolamento a ganhar em separá-las.
+resource "aws_kms_key" "app_secrets" {
+  description             = "Criptografia dos segredos de aplicação do ${var.system}"
+  enable_key_rotation     = true
+  deletion_window_in_days = 30
+
+  tags = merge(local.tags, { Name = "${var.system}-app-secrets" })
+}
+
+resource "aws_kms_alias" "app_secrets" {
+  name          = "alias/${var.system}-app-secrets"
+  target_key_id = aws_kms_key.app_secrets.key_id
+}
+
 # ── Senhas dos RDS ────────────────────────────────────────────────────────────
 # Geradas pelo Terraform, o que significa que ficam no tfstate. É o motivo de o
 # bucket de state ter versionamento, criptografia e bloqueio público.
@@ -33,6 +56,7 @@ module "rds_secret" {
   }
 
   recovery_window_in_days = 0 # ambiente de lab: exclusão imediata permite recriar com o mesmo nome
+  kms_key_arn             = aws_kms_key.app_secrets.arn
 
   tags = local.tags
 }
@@ -49,6 +73,7 @@ resource "aws_secretsmanager_secret" "app_auth" {
   name                    = "${var.system}/app/auth"
   description             = "MASTER_KEY do auth-service"
   recovery_window_in_days = 0
+  kms_key_id              = aws_kms_key.app_secrets.arn
 
   tags = local.tags
 }
@@ -65,6 +90,7 @@ resource "aws_secretsmanager_secret" "app_evaluation" {
   name                    = "${var.system}/app/evaluation"
   description             = "SERVICE_API_KEY do evaluation-service (valor emitido fora do Terraform)"
   recovery_window_in_days = 0
+  kms_key_id              = aws_kms_key.app_secrets.arn
 
   tags = local.tags
 }
