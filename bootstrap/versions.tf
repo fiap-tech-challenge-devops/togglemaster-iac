@@ -8,15 +8,6 @@ terraform {
     }
   }
 
-  # Sem bloco backend versionado, de propósito.
-  #
-  # Na primeira execução o backend S3 ainda não pode existir — o bucket dele é o
-  # que este stage cria. Depois do apply, o workflow gera um backend.tf e roda
-  # `terraform init -force-copy`, migrando o state para o bucket. Da segunda
-  # execução em diante o stage usa backend remoto como qualquer outro, e
-  # converge normalmente.
-  #
-  # O backend.tf gerado é ignorado pelo git (ver .gitignore).
 }
 
 provider "aws" {

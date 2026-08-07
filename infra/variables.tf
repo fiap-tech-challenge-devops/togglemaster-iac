@@ -16,8 +16,6 @@ variable "admin_iam_arns" {
   default     = ["arn:aws:iam::762103020993:user/vitor.aws"]
 }
 
-# ── Rede ──────────────────────────────────────────────────────────────────────
-
 variable "vpc_cidr" {
   description = "CIDR da VPC."
   type        = string
@@ -36,16 +34,12 @@ variable "private_subnet_cidrs" {
   default     = ["10.0.11.0/24", "10.0.12.0/24"]
 }
 
-# ── EKS ───────────────────────────────────────────────────────────────────────
-
 variable "cluster_version" {
   description = "Versão do Kubernetes do control plane."
   type        = string
   default     = "1.32"
 }
 
-# O node group é o baseline: dimensionado para o sistema em repouso. Todo o burst
-# vai para o Karpenter, em SPOT — por isso min = max = 1.
 variable "node_instance_types" {
   description = "Tipos de instância do node group de baseline. t3.large: 2 vCPU, 8 GB, 35 pods — cabe o sistema em repouso."
   type        = list(string)
@@ -76,8 +70,6 @@ variable "karpenter_chart_version" {
   default     = "1.3.3"
 }
 
-# ── RDS ───────────────────────────────────────────────────────────────────────
-
 variable "rds_engine_version" {
   description = "Versão do PostgreSQL."
   type        = string
@@ -96,8 +88,6 @@ variable "rds_allocated_storage" {
   default     = 20
 }
 
-# ── ElastiCache ───────────────────────────────────────────────────────────────
-
 variable "redis_engine_version" {
   description = "Versão da engine Redis."
   type        = string
@@ -110,8 +100,6 @@ variable "redis_node_type" {
   default     = "cache.t4g.micro"
 }
 
-# ── ECR / CI ──────────────────────────────────────────────────────────────────
-
 variable "github_org" {
   description = "Organização do GitHub dona dos repositórios dos microsserviços."
   type        = string
@@ -123,8 +111,6 @@ variable "ci_role_name" {
   type        = string
   default     = "github-actions-ecr-push"
 }
-
-# ── Kubernetes ────────────────────────────────────────────────────────────────
 
 variable "app_namespace" {
   description = "Namespace onde os microsserviços rodam. Precisa bater com o que está no repositório GitOps."

@@ -1,4 +1,3 @@
-# ── Rede ──────────────────────────────────────────────────────────────────────
 output "vpc_id" {
   description = "ID da VPC."
   value       = module.vpc.vpc_id
@@ -9,7 +8,6 @@ output "private_subnet_ids" {
   value       = module.vpc.private_subnet_ids
 }
 
-# ── EKS ───────────────────────────────────────────────────────────────────────
 output "cluster_name" {
   description = "Nome do cluster EKS. Consumido pelo workflow de apply."
   value       = module.eks.cluster_name
@@ -30,8 +28,6 @@ output "update_kubeconfig_command" {
   value       = "aws eks update-kubeconfig --region ${var.region} --name ${module.eks.cluster_name}"
 }
 
-# ── Karpenter ─────────────────────────────────────────────────────────────────
-# Valores que o repositório GitOps referencia nos values do chart e no EC2NodeClass.
 output "karpenter" {
   description = "Valores do Karpenter para o repositório GitOps."
   value = {
@@ -47,7 +43,6 @@ output "lb_controller_role_arn" {
   value       = module.lb_controller.role_arn
 }
 
-# ── Bancos e mensageria ───────────────────────────────────────────────────────
 output "rds_endpoints" {
   description = "Endpoints dos três RDS."
   value       = { for k, m in module.rds : k => m.db_instance_endpoint }
@@ -78,7 +73,6 @@ output "dynamodb_table_name" {
   value       = module.dynamodb.table_name
 }
 
-# ── ECR ───────────────────────────────────────────────────────────────────────
 output "registry_url" {
   description = "URL base do registry — alvo do docker login."
   value       = module.ecr.registry_url
@@ -94,7 +88,6 @@ output "ci_role_arn" {
   value       = aws_iam_role.ci.arn
 }
 
-# ── Identidades no cluster ────────────────────────────────────────────────────
 output "irsa_role_arns" {
   description = "ARNs das roles IRSA, para as annotations dos ServiceAccounts no repositório GitOps."
   value = {

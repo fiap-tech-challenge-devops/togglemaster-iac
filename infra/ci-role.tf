@@ -1,5 +1,3 @@
-# Role assumida pelas esteiras dos cinco microsserviços para publicar imagens no
-# ECR. Federada pelo mesmo OIDC provider criado no stage bootstrap.
 data "aws_iam_openid_connect_provider" "github" {
   url = "https://token.actions.githubusercontent.com"
 }
@@ -20,18 +18,6 @@ data "aws_iam_policy_document" "ci_assume" {
       values   = ["sts.amazonaws.com"]
     }
 
-    # Um padrão por repositório, em vez de um curinga sobre a organização: um
-    # repositório novo na org não ganha permissão de push por acidente.
-    #
-    # Os curingas depois da org E depois do repositório não são frouxidão. Esta
-    # organização usa a claim `sub` customizada do GitHub, que injeta os IDs
-    # imutáveis de org e repositório:
-    #
-    #   repo:fiap-tech-challenge-devops@283760261/auth-service@1314140933:ref:refs/heads/main
-    #
-    # O padrão clássico "repo:<org>/<repo>:*" não casa com isso — o sufixo @<id>
-    # aparece ANTES da barra, onde o curinga final não alcança. Os IDs não são
-    # fixados literalmente porque mudariam se um repositório fosse recriado.
     condition {
       test     = "StringLike"
       variable = "token.actions.githubusercontent.com:sub"
@@ -41,8 +27,6 @@ data "aws_iam_policy_document" "ci_assume" {
 }
 
 data "aws_iam_policy_document" "ci_ecr" {
-  # GetAuthorizationToken não aceita escopo por recurso — é o token do registry
-  # inteiro, e a API rejeita qualquer Resource diferente de "*".
   statement {
     sid       = "LoginNoRegistry"
     effect    = "Allow"
@@ -50,7 +34,6 @@ data "aws_iam_policy_document" "ci_ecr" {
     resources = ["*"]
   }
 
-  # O push em si fica restrito aos cinco repositórios criados por este stage.
   statement {
     sid    = "PushNosRepositoriosDoSistema"
     effect = "Allow"

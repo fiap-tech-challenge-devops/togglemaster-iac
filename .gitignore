@@ -18,6 +18,10 @@ bootstrap/backend.tf
 *.tfvars
 !*.tfvars.example
 
+# Material de estudo pessoal, com a explicação linha a linha de cada stage.
+# Não faz parte da entrega — o repositório documenta as decisões em docs/ e README.
+*/explain/
+
 crash.log
 override.tf
 override.tf.json

@@ -1,5 +1,3 @@
-# ── metrics-server ────────────────────────────────────────────────────────────
-# Sem ele o HPA não tem de onde ler CPU e memória, e fica preso em "unknown".
 resource "helm_release" "metrics_server" {
   name       = "metrics-server"
   namespace  = "kube-system"
@@ -11,9 +9,6 @@ resource "helm_release" "metrics_server" {
   timeout = 600
 }
 
-# ── AWS Load Balancer Controller ──────────────────────────────────────────────
-# É ele que transforma Ingress em ALB. Sem ele, nada do cluster é acessível de
-# fora. A IAM role vem do stage infra (módulo eks-aws-lb-controller).
 resource "helm_release" "aws_lb_controller" {
   name       = "aws-load-balancer-controller"
   namespace  = "kube-system"
@@ -38,18 +33,11 @@ resource "helm_release" "aws_lb_controller" {
         }
       }
 
-      # O webhook intercepta TODO Service do cluster. Antes de os pods do
-      # controller ficarem prontos, ele quebra a criação de Services de outros
-      # charts com "no endpoints available for aws-load-balancer-webhook-service".
-      # Só usamos Ingress, nunca Service type=LoadBalancer — é dispensável.
       enableServiceMutatorWebhook = false
     })
   ]
 }
 
-# ── External Secrets Operator ─────────────────────────────────────────────────
-# Materializa no cluster os segredos que vivem no Secrets Manager — as connection
-# strings dos três RDS e as chaves de aplicação.
 resource "helm_release" "external_secrets" {
   name             = "external-secrets"
   namespace        = "external-secrets"
@@ -58,8 +46,6 @@ resource "helm_release" "external_secrets" {
   chart            = "external-secrets"
   version          = var.external_secrets_chart_version
 
-  # wait é obrigatório aqui: o ClusterSecretStore abaixo é um CR da CRD que este
-  # chart instala, e o webhook do operator precisa estar respondendo.
   wait    = true
   timeout = 600
 
@@ -76,12 +62,6 @@ resource "helm_release" "external_secrets" {
   ]
 }
 
-# O ClusterSecretStore é um CR da CRD que o chart acima acabou de criar.
-#
-# Com kubernetes_manifest o plan falharia: o provider valida o manifesto contra o
-# schema da API antes do apply, e nesse momento a CRD ainda não existe — foi
-# exatamente onde a versão anterior deste projeto quebrou. Um chart local resolve
-# porque o Helm renderiza e aplica em tempo de apply.
 resource "helm_release" "cluster_secret_store" {
   name      = "cluster-secret-store"
   namespace = "external-secrets"
@@ -98,9 +78,6 @@ resource "helm_release" "cluster_secret_store" {
   depends_on = [helm_release.external_secrets]
 }
 
-# ── KEDA ──────────────────────────────────────────────────────────────────────
-# O analytics-service escala pela profundidade da fila SQS, não por CPU. Quem
-# consulta a fila é o keda-operator, e por isso a role dele é separada da dos pods.
 resource "helm_release" "keda" {
   name             = "keda"
   namespace        = "keda"
@@ -124,11 +101,8 @@ resource "helm_release" "keda" {
     })
   ]
 
-  # O KEDA cria HPAs por baixo dos panos; sem o metrics-server eles não reportam.
   depends_on = [helm_release.metrics_server]
 }
-
-# ── Opcionais ─────────────────────────────────────────────────────────────────
 
 resource "helm_release" "cert_manager" {
   count = var.enable_cert_manager ? 1 : 0
@@ -158,7 +132,6 @@ resource "helm_release" "kube_prometheus_stack" {
   chart            = "kube-prometheus-stack"
   version          = var.kube_prometheus_stack_chart_version
 
-  # Timeout maior: a stack sobe muitos componentes e puxa imagens grandes.
   wait    = true
   timeout = 1200
 }

@@ -1,11 +1,5 @@
 data "aws_caller_identity" "current" {}
 
-# Os módulos vêm da biblioteca terraform-aws-modules, sempre fixados numa TAG.
-#
-# O `source` é escrito por extenso em cada bloco porque o Terraform exige string
-# literal ali — nem variável, nem local, nem interpolação. Isso é intencional do
-# Terraform: o `init` precisa resolver os módulos antes de avaliar qualquer
-# expressão. Para subir de versão, é find/replace de `?ref=v0.1.0` neste diretório.
 locals {
   cluster_name = "eks-${var.system}"
 
@@ -13,8 +7,6 @@ locals {
     System = var.system
   }
 
-  # Os três RDS do enunciado. db_name e username são as strings exatas que as
-  # aplicações esperam na connection string.
   rds_instances = {
     auth      = { db_name = "auth_db", username = "auth_user" }
     flags     = { db_name = "flags_db", username = "flags_user" }
@@ -30,7 +22,6 @@ locals {
   ]
 }
 
-# ── Rede ──────────────────────────────────────────────────────────────────────
 module "vpc" {
   source = "github.com/fiap-tech-challenge-devops/terraform-aws-modules//vpc?ref=v0.1.0"
 
@@ -41,11 +32,8 @@ module "vpc" {
   private_subnet_cidrs = var.private_subnet_cidrs
 
   enable_nat_gateway = true
-  single_nat_gateway = true # um NAT só — é o item mais caro da conta em ambiente de lab
+  single_nat_gateway = true
 
-  # As tags são contrato com os controllers que rodam dentro do cluster:
-  # kubernetes.io/role/* diz ao Load Balancer Controller onde criar os ALBs;
-  # karpenter.sh/discovery diz ao Karpenter onde lançar os nós.
   public_subnet_tags = {
     "kubernetes.io/role/elb"                      = "1"
     "kubernetes.io/cluster/${local.cluster_name}" = "shared"
@@ -60,7 +48,6 @@ module "vpc" {
   tags = local.tags
 }
 
-# ── EKS ───────────────────────────────────────────────────────────────────────
 module "eks" {
   source = "github.com/fiap-tech-challenge-devops/terraform-aws-modules//eks?ref=v0.1.0"
 
@@ -76,8 +63,6 @@ module "eks" {
   enable_irsa    = true
   create_kms_key = true
 
-  # Sem isto, quem cria o cluster não recebe acesso a ele — e o stage addons,
-  # que roda com a mesma role, não conseguiria instalar o Argo CD.
   bootstrap_cluster_creator_admin_permissions = true
 
   node_groups = {
@@ -93,9 +78,6 @@ module "eks" {
     }
   }
 
-  # Prefix delegation permite que a ENI aloque blocos /28 de IP. Importa para os
-  # nós do Karpenter, que declaram max-pods alto; o node group de baseline usa o
-  # limite nativo do tipo de instância.
   cluster_addons = {
     coredns    = {}
     kube-proxy = {}
@@ -110,7 +92,7 @@ module "eks" {
     eks-pod-identity-agent = {}
   }
 
-  enable_ebs_csi_driver = false # nenhum serviço usa PVC — economiza três pods de sistema
+  enable_ebs_csi_driver = false
 
   access_entries = {
     for arn in var.admin_iam_arns : replace(arn, "/[^a-zA-Z0-9]/", "-") => {
@@ -128,10 +110,6 @@ module "eks" {
   tags = local.tags
 }
 
-# ── Karpenter: plano AWS ──────────────────────────────────────────────────────
-# O chart é instalado pelo Argo CD, a partir do repositório GitOps. Aqui ficam só
-# os recursos AWS: role dos nós, IRSA do controller, fila de interrupção e as
-# regras do EventBridge que a alimentam.
 module "karpenter" {
   source = "github.com/fiap-tech-challenge-devops/terraform-aws-modules//eks-karpenter?ref=v0.1.0"
 
@@ -146,7 +124,6 @@ module "karpenter" {
   tags = local.tags
 }
 
-# ── AWS Load Balancer Controller: plano AWS ──────────────────────────────────
 module "lb_controller" {
   source = "github.com/fiap-tech-challenge-devops/terraform-aws-modules//eks-aws-lb-controller?ref=v0.1.0"
 
@@ -162,7 +139,6 @@ module "lb_controller" {
   tags = local.tags
 }
 
-# ── RDS PostgreSQL × 3 ────────────────────────────────────────────────────────
 module "rds" {
   source   = "github.com/fiap-tech-challenge-devops/terraform-aws-modules//rds?ref=v0.1.0"
   for_each = local.rds_instances
@@ -180,17 +156,12 @@ module "rds" {
   db_name  = each.value.db_name
   username = each.value.username
 
-  # Senha gerada pelo Terraform, e não gerenciada pela AWS, porque precisamos
-  # montar a connection string completa num secret de nome previsível — é ela que
-  # o External Secrets injeta no cluster.
   manage_master_user_password = false
   password                    = random_password.rds[each.key].result
 
   vpc_id     = module.vpc.vpc_id
   subnet_ids = module.vpc.private_subnet_ids
 
-  # Os pods recebem IP do range da VPC via VPC-CNI, então liberar o CIDR inteiro
-  # é o que dá acesso aos pods sem referenciar o security group do cluster.
   allowed_cidr_blocks = [var.vpc_cidr]
 
   multi_az                = false
@@ -201,7 +172,6 @@ module "rds" {
   tags = local.tags
 }
 
-# ── ElastiCache Redis ─────────────────────────────────────────────────────────
 module "redis" {
   source = "github.com/fiap-tech-challenge-devops/terraform-aws-modules//elasticache?ref=v0.1.0"
 
@@ -220,25 +190,23 @@ module "redis" {
   allowed_cidr_blocks = [var.vpc_cidr]
 
   at_rest_encryption_enabled = true
-  transit_encryption_enabled = false # o evaluation-service conecta em redis://, sem TLS
-  snapshot_retention_limit   = 0     # cache puro, nada a preservar
+  transit_encryption_enabled = false
+  snapshot_retention_limit   = 0
 
   tags = local.tags
 }
 
-# ── SQS ───────────────────────────────────────────────────────────────────────
 module "sqs" {
   source = "github.com/fiap-tech-challenge-devops/terraform-aws-modules//sqs?ref=v0.1.0"
 
   name                      = "${var.system}-evaluation-events"
-  receive_wait_time_seconds = 20 # long polling: menos chamadas vazias, menos custo
+  receive_wait_time_seconds = 20
 
-  create_dlq = false # o enunciado pede uma fila; DLQ não é requisito
+  create_dlq = false
 
   tags = local.tags
 }
 
-# ── DynamoDB ──────────────────────────────────────────────────────────────────
 module "dynamodb" {
   source = "github.com/fiap-tech-challenge-devops/terraform-aws-modules//dynamodb?ref=v0.1.0"
 
@@ -253,15 +221,12 @@ module "dynamodb" {
   tags = local.tags
 }
 
-# ── ECR ───────────────────────────────────────────────────────────────────────
 module "ecr" {
   source = "github.com/fiap-tech-challenge-devops/terraform-aws-modules//ecr?ref=v0.1.0"
 
   namespace        = var.system
   repository_names = local.services
 
-  # Tags derivadas do commit nunca são reaproveitadas. Imutabilidade garante que
-  # a imagem escaneada na esteira é a mesma que o Argo CD implanta.
   image_tag_mutability = "IMMUTABLE"
   scan_on_push         = true
 

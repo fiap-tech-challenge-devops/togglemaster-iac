@@ -27,7 +27,6 @@ output "karpenter_nodepool" {
   }
 }
 
-# ── Argo CD ───────────────────────────────────────────────────────────────────
 output "argocd_namespace" {
   description = "Namespace onde o Argo CD foi instalado."
   value       = kubernetes_namespace_v1.argocd.metadata[0].name

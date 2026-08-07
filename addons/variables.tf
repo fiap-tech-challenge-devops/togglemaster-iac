@@ -10,12 +10,6 @@ variable "system" {
   default     = "togglemaster"
 }
 
-# ── Versões dos charts ────────────────────────────────────────────────────────
-# Fixadas de propósito. Um chart sem versão resolve para a mais recente a cada
-# apply, e o resultado passa a depender de quando você rodou.
-#
-# Confira as disponíveis com: helm search repo <repo>/<chart> --versions
-
 variable "metrics_server_chart_version" {
   description = "Versão do chart do metrics-server."
   type        = string
@@ -52,8 +46,6 @@ variable "argocd_apps_chart_version" {
   default     = "2.0.2"
 }
 
-# ── Componentes opcionais ─────────────────────────────────────────────────────
-
 variable "enable_cert_manager" {
   description = "Instala o cert-manager. Necessário apenas se você for emitir certificados no cluster."
   type        = bool
@@ -78,8 +70,6 @@ variable "kube_prometheus_stack_chart_version" {
   default     = "62.7.0"
 }
 
-# ── Karpenter ─────────────────────────────────────────────────────────────────
-
 variable "karpenter_node_capacity_types" {
   description = "Tipos de capacidade que o NodePool pode provisionar. Spot primeiro, on-demand como fallback quando não há spot disponível."
   type        = list(string)
@@ -97,8 +87,6 @@ variable "karpenter_cpu_limit" {
   type        = number
   default     = 32
 }
-
-# ── Argo CD e repositório GitOps ──────────────────────────────────────────────
 
 variable "argocd_namespace" {
   description = "Namespace do Argo CD."
