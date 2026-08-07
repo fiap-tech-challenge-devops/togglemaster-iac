@@ -74,7 +74,15 @@ Vale anotar a leitura de cada um, porque eles continuam sendo verdade sobre a in
 
 ## Checkov
 
-Primeira execução completa: **99 passaram, 34 falharam** — mas em apenas **9 regras distintas**, muito repetidas.
+Foram duas rodadas — a segunda porque a correção da primeira gerou achados novos.
+
+| Rodada | Passaram | Falharam | Regras distintas |
+|---|---|---|---|
+| 1ª | 99 | 34 | 9 |
+| 2ª | 115 | 4 | 4 |
+| 3ª (esperada) | — | 0 | — |
+
+Os 34 iniciais concentravam-se em poucas regras muito repetidas: `CKV_TF_1` sozinha respondia por 17.
 
 ### O que foi corrigido
 
@@ -96,11 +104,43 @@ O bucket tem versionamento ligado, e há uma escrita de state por plan e por app
 
 Correção em [`bootstrap/main.tf`](../../bootstrap/main.tf): expira versões não-correntes após **90 dias** e aborta uploads multipart incompletos após 7. Os 90 dias são folgados de propósito — a versão anterior do state é a rede de segurança para recuperar um apply interrompido, e não se descobre que precisa dela no mesmo dia.
 
-**`CKV2_AWS_64` — KMS key sem policy definida** (1 achado)
+**`CKV2_AWS_64` — KMS key sem policy definida** (2 achados, em duas rodadas)
 
 Sem policy explícita, o KMS aplica a padrão, que delega toda a decisão ao IAM da conta. Declarar a policy torna o controle visível e versionado.
 
 A primeira declaração da policy **é obrigatória**: sem delegar ao root da conta, a chave fica órfã — nem o administrador consegue alterá-la depois, e a única saída é abrir chamado na AWS.
+
+Duas chaves precisaram disso:
+
+- `aws_kms_key.tfstate` ([`bootstrap/main.tf`](../../bootstrap/main.tf)) — administração pelo root + uso pelo S3, restrito por `kms:ViaService`.
+- `aws_kms_key.app_secrets` ([`infra/secrets.tf`](../../infra/secrets.tf)) — administração pelo root + uso pelo Secrets Manager + **leitura direta pela role IRSA do External Secrets**.
+
+A terceira declaração da segunda chave merece nota: o ESO decifra o segredo **direto**, não através do Secrets Manager, então a condição `kms:ViaService` não o cobre. Sem ela, o `ExternalSecret` fica preso em `SecretSyncedError` com `AccessDenied` citando o KMS.
+
+> A chave `app_secrets` só apareceu na segunda rodada porque **ela mesma foi criada para corrigir o `CKV_AWS_149`** — e nasceu sem policy, exatamente o defeito que eu tinha acabado de corrigir na outra. Duas chaves, tratamento inconsistente. É o tipo de erro que a segunda execução do scan pega e a revisão humana deixa passar.
+
+### A correção que gerou achados novos
+
+Adicionar a key policy fez **três regras genéricas de IAM** dispararem sobre o documento:
+
+| Regra | Leitura do Checkov |
+|---|---|
+| `CKV_AWS_111` | write access sem constraint |
+| `CKV_AWS_356` | policy com `Resource: "*"` |
+| `CKV_AWS_109` | permissions management sem constraint |
+
+A leitura literal está certa: é `kms:*` sobre `*`. Mas num documento de **key policy** o `"*"` significa *esta chave* — não existe outro recurso no escopo do documento. E a declaração de administração pelo root é a que a própria AWS exige.
+
+**A exceção foi feita inline, não no `.checkov.yaml`.** As três são regras genéricas de IAM: ignorá-las globalmente cegaria o scan para as policies de verdade deste repositório — [`infra/ci-role.tf`](../../infra/ci-role.tf) e [`infra/irsa.tf`](../../infra/irsa.tf), onde `Resource: "*"` seria um problema real.
+
+```hcl
+data "aws_iam_policy_document" "app_secrets_key" {
+  #checkov:skip=CKV_AWS_111:Key policy — o "*" é a própria chave, e a delegação ao root é exigida pela AWS
+  ...
+}
+```
+
+O escopo do skip inline é o bloco, e só ele.
 
 ### O que foi ignorado, e por quê
 
@@ -164,6 +204,18 @@ As ações declaradas no workflow baixaram normalmente — só a resolução de 
 `apply`, `bootstrap` e `destroy` dividiam o grupo `iac-${{ github.ref }}`. Um `apply` disparado por push ficava parado no gate de aprovação do environment e **segurava o grupo**, deixando o `bootstrap` na fila indefinidamente.
 
 O `bootstrap` tem state independente e não disputa recurso com os outros — passou a ter grupo próprio.
+
+### Corrigir um achado gerou três novos
+
+A key policy adicionada para resolver o `CKV2_AWS_64` disparou `CKV_AWS_111`, `CKV_AWS_356` e `CKV_AWS_109` — regras genéricas de IAM que leem `kms:*` sobre `*` como policy irrestrita, sem distinguir key policy de policy de identidade.
+
+Vale como lembrete de que o número de achados não cai monotonicamente: cada correção é código novo, sujeito ao mesmo scan. Convergir levou três execuções.
+
+### `terraform validate` não detecta ciclo de dependência
+
+A policy da chave `app_secrets` referencia `module.irsa_eso.role_arn`, e a policy do ESO referencia `aws_kms_key.app_secrets.arn`. Parece circular.
+
+O `validate` passa mesmo se houver ciclo — ele não constrói o grafo de dependências. Só o `plan` acusa, com `Error: Cycle:`. Aqui não havia ciclo real (a policy do ESO usa só o ARN da chave, conhecido na criação), mas a confirmação exigiu rodar um `plan` completo, não um `validate`.
 
 ### O bootstrap não convergia
 

@@ -50,6 +50,17 @@ resource "aws_kms_key" "tfstate" {
 # órfã — nem o administrador consegue alterá-la depois, e a única saída é abrir
 # chamado na AWS.
 data "aws_iam_policy_document" "tfstate_key" {
+  # As três regras abaixo leem "kms:* sobre *" como policy irrestrita. Num
+  # documento de KEY POLICY isso não é verdade: o "*" significa "esta chave" —
+  # não há outro recurso no escopo. E a declaração de administração pelo root é
+  # EXIGIDA pela AWS; sem ela a chave fica órfã, sem ninguém que possa alterá-la.
+  #
+  # O skip é inline, e não global no .checkov.yaml, para as regras continuarem
+  # valendo nas policies IAM de verdade deste repositório (ci-role.tf, irsa.tf).
+  #checkov:skip=CKV_AWS_111:Key policy — o "*" é a própria chave, e a delegação ao root é exigida pela AWS
+  #checkov:skip=CKV_AWS_356:Key policy — Resource "*" num documento de chave significa a própria chave
+  #checkov:skip=CKV_AWS_109:Key policy — kms:* para o root é o que impede a chave de ficar órfã
+
   statement {
     sid       = "PermiteAdministracaoPelaConta"
     effect    = "Allow"

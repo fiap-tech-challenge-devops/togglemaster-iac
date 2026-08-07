@@ -12,8 +12,68 @@ resource "aws_kms_key" "app_secrets" {
   description             = "Criptografia dos segredos de aplicação do ${var.system}"
   enable_key_rotation     = true
   deletion_window_in_days = 30
+  policy                  = data.aws_iam_policy_document.app_secrets_key.json
 
   tags = merge(local.tags, { Name = "${var.system}-app-secrets" })
+}
+
+data "aws_iam_policy_document" "app_secrets_key" {
+  # Mesmo raciocínio da chave do state, em bootstrap/main.tf: num documento de
+  # key policy o "*" é a própria chave, e a delegação ao root é exigida pela AWS.
+  #checkov:skip=CKV_AWS_111:Key policy — o "*" é a própria chave, e a delegação ao root é exigida pela AWS
+  #checkov:skip=CKV_AWS_356:Key policy — Resource "*" num documento de chave significa a própria chave
+  #checkov:skip=CKV_AWS_109:Key policy — kms:* para o root é o que impede a chave de ficar órfã
+
+  statement {
+    sid       = "PermiteAdministracaoPelaConta"
+    effect    = "Allow"
+    actions   = ["kms:*"]
+    resources = ["*"]
+
+    principals {
+      type        = "AWS"
+      identifiers = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"]
+    }
+  }
+
+  # O Secrets Manager cifra e decifra o conteúdo do segredo em nome de quem
+  # chama. A condição de ViaService restringe esse uso ao serviço, nesta região.
+  statement {
+    sid    = "PermiteUsoPeloSecretsManager"
+    effect = "Allow"
+    actions = [
+      "kms:Decrypt",
+      "kms:GenerateDataKey",
+      "kms:DescribeKey",
+    ]
+    resources = ["*"]
+
+    principals {
+      type        = "AWS"
+      identifiers = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "kms:ViaService"
+      values   = ["secretsmanager.${var.region}.amazonaws.com"]
+    }
+  }
+
+  # O External Secrets Operator decifra direto, e não via Secrets Manager — a
+  # condição acima não o cobre. Sem esta declaração, o ExternalSecret fica preso
+  # em SecretSyncedError com AccessDenied citando o KMS.
+  statement {
+    sid       = "PermiteLeituraPeloExternalSecrets"
+    effect    = "Allow"
+    actions   = ["kms:Decrypt", "kms:DescribeKey"]
+    resources = ["*"]
+
+    principals {
+      type        = "AWS"
+      identifiers = [module.irsa_eso.role_arn]
+    }
+  }
 }
 
 resource "aws_kms_alias" "app_secrets" {
