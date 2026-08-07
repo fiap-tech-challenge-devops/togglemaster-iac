@@ -47,9 +47,9 @@ jobs:
       matrix:
         stage: [bootstrap, infra, addons]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: hashicorp/setup-terraform@v3
+      - uses: hashicorp/setup-terraform@v4
         with:
           terraform_version: ${{ env.TF_VERSION }}
 
@@ -71,7 +71,7 @@ jobs:
     name: Security
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # O tfsec foi descontinuado e incorporado ao Trivy — "trivy config" roda o
       # mesmo conjunto de regras, com manutenção ativa.
@@ -116,15 +116,15 @@ jobs:
           - stage: addons
             required: false
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Autenticar na AWS (OIDC)
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ secrets.AWS_OIDC_ROLE_ARN_VITAO }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - uses: hashicorp/setup-terraform@v3
+      - uses: hashicorp/setup-terraform@v4
         with:
           terraform_version: ${{ env.TF_VERSION }}
 
@@ -154,10 +154,27 @@ jobs:
       # Em disparo manual não há PR para comentar — o plano vai para o resumo do run.
       - name: Resumo do plano
         if: always()
+        env:
+          OUTCOME: ${{ steps.plan.outcome }}
+          REQUIRED: ${{ matrix.required }}
         run: |
+          # Um "failure" no stage não obrigatório quase sempre significa que o
+          # infra ainda não foi aplicado, e não que há algo errado. Sem esta
+          # distinção, o resumo fica idêntico ao de uma falha de verdade — e daqui
+          # a algumas semanas ninguém lembra qual é qual.
+          case "$OUTCOME:$REQUIRED" in
+            success:*)     ICON="✅"; NOTA="" ;;
+            failure:false) ICON="⚠️"; NOTA="> Falha esperada enquanto o stage \`infra\` não tiver sido aplicado — o \`addons\` lê do SSM parâmetros que só existem depois dele. Não bloqueia o merge." ;;
+            *)             ICON="❌"; NOTA="" ;;
+          esac
+
           {
-            echo "### Terraform plan — \`${{ matrix.stage }}\` (${{ steps.plan.outcome }})"
+            echo "### $ICON Terraform plan — \`${{ matrix.stage }}\` ($OUTCOME)"
             echo ""
+            if [ -n "$NOTA" ]; then
+              echo "$NOTA"
+              echo ""
+            fi
             echo '<details><summary>Ver plano</summary>'
             echo ""
             echo '```terraform'
@@ -170,7 +187,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Comentar no PR
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         if: always() && github.event_name == 'pull_request'
         with:
           script: |
