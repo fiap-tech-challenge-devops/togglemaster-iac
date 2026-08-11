@@ -11,12 +11,11 @@ name: IaC — Plan
 # O apply replaneja no próprio run. Ver iac-apply.yml.
 
 on:
-  # FASE DE TESTES: gatilho por PR desligado para o plano rodar só quando você
-  # pedir. Reative quando a esteira estiver estável — em PR ele comenta o plano
-  # no próprio pull request, que é o fluxo de revisão pretendido.
-  #
-  # pull_request:
-  #   branches: [main]
+  # Em PR, os jobs deste workflow são os checks obrigatórios do ruleset da main:
+  # sem todos verdes, o botão de merge fica bloqueado.
+  pull_request:
+    branches: [main]
+  # Mantido para diagnóstico fora de PR.
   workflow_dispatch:
     inputs:
       region:
@@ -45,7 +44,9 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        stage: [bootstrap, infra, addons]
+        # bootstrap fica de fora: ele é aplicado por disparo manual e raro, e não
+        # entra no fluxo de PR -> merge -> apply que este workflow protege.
+        stage: [infra, addons]
     steps:
       - uses: actions/checkout@v7
 
