@@ -3,14 +3,17 @@ name: IaC — Apply (infra → addons)
 # Dispara no merge para main. Cada stage replaneja e aplica no mesmo job, com
 # -auto-approve: nenhum plano atravessa a fronteira entre runs.
 #
-# O gate humano é o environment "production" no job de infra. Aprovada a infra, o
-# addons segue automaticamente — é a mesma decisão ("aplicar o que está na
-# main"). Se quiser aprovar os dois separadamente, basta adicionar
-# `environment: production` também no job addons.
+# NÃO há gate de aprovação aqui, e isso é deliberado. O gate é o pull request: o
+# ruleset da main exige o `plan` verde, e quem aprova o PR já está decidindo
+# aplicar. Um segundo "approve" no environment aprovaria a mesma decisão duas
+# vezes, e a primeira aprovação é a que teve o plano na frente para ler.
+#
+# O efeito colateral que motivou a remoção: um apply parado no gate segurava o
+# grupo de concurrency, e o merge seguinte ficava enfileirado atrás dele por
+# tempo indeterminado — o mesmo impasse que já havia acontecido com o bootstrap.
 
 on:
-  # Dispara no merge para main. O job infra tem environment: production, então o
-  # apply não roda sozinho — ele enfileira e espera aprovação.
+  # Dispara no merge para main e aplica direto, sem espera.
   #
   # Atenção ao filtro de paths: um PR que só toque bootstrap/, docs ou o
   # .checkov.yaml passa no plan, mergeia e NÃO dispara apply. É o comportamento
@@ -47,7 +50,6 @@ jobs:
   infra:
     name: Stage 1 — infra
     runs-on: ubuntu-latest
-    environment: production
     outputs:
       cluster_name: ${{ steps.outputs.outputs.cluster_name }}
     steps:

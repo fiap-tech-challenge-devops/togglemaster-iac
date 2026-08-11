@@ -235,10 +235,17 @@ jobs:
             }
           ' plan.json > plan-estrutura.json
 
-          # Plano sem mudança nenhuma: não há o que resumir.
+          # Plano sem mudança nenhuma: a mensagem é escrita aqui, sem chamar a
+          # API. Pagar uma requisição para o modelo dizer "não há mudanças",
+          # quando o jq acima já sabe disso com certeza, seria desperdício — e a
+          # resposta viria com redação variável a cada execução.
+          #
+          # Por isso este caminho não leva o rodapé de "gerado por IA": não foi.
           if [ "$(jq '.recursos | length' plan-estrutura.json)" = "0" ] \
              && [ "$(jq '.outputs | length' plan-estrutura.json)" = "0" ]; then
-            echo "Nenhuma mudança no plano — resumo dispensado."
+            echo "Nenhuma mudança no plano — mensagem estática, sem chamar a API."
+            printf '%s\n' "**Nenhuma alteração.** O plano não cria, altera nem destrói recurso algum — a infraestrutura já corresponde à configuração." > resumo-ia.md
+            echo "ok=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
@@ -287,6 +294,10 @@ jobs:
           # o resumo sairia como um bloco em branco com o rodapé embaixo.
           # Apagar o arquivo é o que faz os dois steps seguintes o ignorarem.
           if grep -q '[^[:space:]]' resumo-ia.md 2>/dev/null; then
+            # O rodapé mora no arquivo, e só neste caminho: é o único em que a
+            # resposta veio mesmo do modelo. Os steps que exibem o resumo apenas
+            # reproduzem o arquivo, sem acrescentar nada.
+            printf '\n%s\n' "_Resumo gerado por IA a partir da estrutura do plano. O plano abaixo é a fonte da verdade._" >> resumo-ia.md
             echo "ok=true" >> "$GITHUB_OUTPUT"
           else
             rm -f resumo-ia.md
@@ -318,11 +329,11 @@ jobs:
               echo ""
             fi
             # O resumo entra ACIMA do plano, não no lugar dele: quem quiser
-            # conferir continua com a saída íntegra logo abaixo.
+            # conferir continua com a saída íntegra logo abaixo. O arquivo já vem
+            # pronto do step anterior, rodapé incluído quando cabe — aqui só se
+            # reproduz o conteúdo.
             if [ -s "${{ matrix.stage }}/resumo-ia.md" ]; then
               cat "${{ matrix.stage }}/resumo-ia.md"
-              echo ""
-              echo "_Resumo gerado por IA a partir da estrutura do plano. O plano abaixo é a fonte da verdade._"
               echo ""
             fi
             echo '<details><summary>Ver plano</summary>'
@@ -353,14 +364,11 @@ jobs:
             }
 
             // Opcional por definição: só o infra gera resumo, e mesmo lá ele
-            // pode faltar (secret ausente, API fora, plano sem mudanças).
+            // pode faltar (secret ausente, API fora, resposta sem texto).
+            // O arquivo já vem pronto, rodapé incluído quando cabe.
             let resumo = '';
             try {
-              const t = fs.readFileSync(stage + '/resumo-ia.md', 'utf8').trim();
-              if (t) {
-                resumo = t + '\n\n_Resumo gerado por IA a partir da estrutura do plano. '
-                       + 'O plano abaixo é a fonte da verdade._\n';
-              }
+              resumo = fs.readFileSync(stage + '/resumo-ia.md', 'utf8').trim();
             } catch (e) { /* sem resumo — segue com o plano puro */ }
 
             // O corpo de um comentário tem limite de 65536 caracteres. O trecho

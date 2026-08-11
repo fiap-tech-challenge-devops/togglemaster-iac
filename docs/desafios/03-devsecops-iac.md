@@ -258,6 +258,12 @@ As ações declaradas no workflow baixaram normalmente — só a resolução de 
 
 O `bootstrap` tem state independente e não disputa recurso com os outros — passou a ter grupo próprio.
 
+**Voltou a acontecer, e a segunda vez expôs a causa de verdade.** Com o `bootstrap` já isolado, um merge disparou um `apply` que ficou esperando aprovação, e o merge seguinte enfileirou atrás dele. Grupo próprio resolvia a colisão entre workflows diferentes, não entre dois runs do mesmo workflow.
+
+O problema não era o `concurrency` — era o gate. O environment `production` no job de `infra` pedia uma aprovação que **já tinha sido dada no pull request**: o ruleset da main exige o `plan` verde, e quem aprova o PR está decidindo aplicar, com o plano na frente para ler. A segunda aprovação não acrescentava informação e ainda travava a fila.
+
+O gate saiu do `apply`. Continua no `destroy`, e ali por um motivo que não se aplica ao `apply`: o `destroy` roda por `workflow_dispatch`, sem PR, sem revisão e sem plano — o environment é a única confirmação humana que existe naquele caminho.
+
 ### Corrigir um achado gerou três novos
 
 A key policy adicionada para resolver o `CKV2_AWS_64` disparou `CKV_AWS_111`, `CKV_AWS_356` e `CKV_AWS_109` — regras genéricas de IAM que leem `kms:*` sobre `*` como policy irrestrita, sem distinguir key policy de policy de identidade.
