@@ -3,9 +3,19 @@
 
 # O arquivo de plano contém todos os valores dos atributos em texto claro,
 # inclusive senhas e conteúdo do Secrets Manager. Nunca versionar.
+#
+# Vale para o binário E para o JSON: "terraform show -json" NÃO redige valores
+# sensíveis — o valor em texto claro fica ao lado do próprio "sensitive": true.
+# Só o "terraform show" humano redige.
 tfplan
 *.tfplan
 plan.txt
+plan.json
+
+# Derivados do plano gerados pela esteira: o JSON reduzido enviado à API e o
+# resumo devolvido por ela.
+plan-estrutura.json
+resumo-ia.md
 
 *.tfstate
 *.tfstate.*
