@@ -73,21 +73,6 @@ output "dynamodb_table_name" {
   value       = module.dynamodb.table_name
 }
 
-output "registry_url" {
-  description = "URL base do registry — alvo do docker login."
-  value       = module.ecr.registry_url
-}
-
-output "repository_urls" {
-  description = "URL de cada repositório, por serviço. Vai no campo image.repository dos values do GitOps."
-  value       = module.ecr.repository_urls
-}
-
-output "ci_role_arn" {
-  description = "ARN da role de push no ECR. Configure no secret AWS_ROLE_ARN dos repositórios dos microsserviços."
-  value       = aws_iam_role.ci.arn
-}
-
 output "irsa_role_arns" {
   description = "ARNs das roles IRSA, para as annotations dos ServiceAccounts no repositório GitOps."
   value = {

@@ -37,8 +37,8 @@ Fixar em tag e não em `main` é deliberado: a biblioteca é compartilhada, e um
 ## Estrutura
 
 ```
-bootstrap/    # bucket S3 do state remoto — roda uma vez, state descartável
-infra/        # rede, cluster, bancos, mensageria, registry, identidades
+bootstrap/    # state remoto, repositórios ECR e a role de CI
+infra/        # rede, cluster, bancos, mensageria, identidades
 addons/       # componentes que rodam dentro do cluster, incluindo o Argo CD
 ```
 
@@ -98,7 +98,11 @@ Em permissões, `AdministratorAccess` resolve para este escopo — o stage `infr
 
 ### Por que três stages
 
-**`bootstrap`** resolve o ovo-e-galinha do state: o bucket S3 que guarda o `tfstate` não pode guardar o state que o cria. Roda uma vez, com state local, e o resultado é descartável — a partir daí os demais stages usam o backend remoto. É o único recurso deste stage; a identidade das esteiras é pré-requisito manual, pelo motivo acima.
+**`bootstrap`** guarda os recursos de ciclo de vida longo: o bucket S3 do state, os cinco repositórios ECR e a role de CI que publica neles.
+
+Ele resolve o ovo-e-galinha do state — o bucket que guarda o `tfstate` não pode guardar o state que o cria. Na primeira execução roda com state local e depois migra o próprio state para o bucket; a partir daí converge como qualquer outro stage.
+
+O ECR vive aqui, e não no `infra`, por três motivos: a esteira de CI dos microsserviços passa a ser testável **sem subir a infraestrutura**, as imagens sobrevivem ao `destroy` do ambiente, e o `destroy` do `infra` deixa de falhar com `RepositoryNotEmptyException` quando há imagem publicada.
 
 **`infra`** usa apenas o provider `aws` e cabe em um único apply. Isso inclui o plano AWS do Karpenter e do Load Balancer Controller (IAM, IRSA, SQS, EventBridge), que vêm dos módulos `eks-karpenter` e `eks-aws-lb-controller` da biblioteca.
 

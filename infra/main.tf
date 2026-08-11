@@ -12,14 +12,6 @@ locals {
     flags     = { db_name = "flags_db", username = "flags_user" }
     targeting = { db_name = "targeting_db", username = "targeting_user" }
   }
-
-  services = [
-    "auth-service",
-    "flag-service",
-    "targeting-service",
-    "evaluation-service",
-    "analytics-service",
-  ]
 }
 
 module "vpc" {
@@ -217,24 +209,6 @@ module "dynamodb" {
   attributes = [
     { name = "event_id", type = "S" }
   ]
-
-  tags = local.tags
-}
-
-module "ecr" {
-  source = "github.com/fiap-tech-challenge-devops/terraform-aws-modules//ecr?ref=v0.1.0"
-
-  namespace        = var.system
-  repository_names = local.services
-
-  image_tag_mutability = "IMMUTABLE"
-  scan_on_push         = true
-
-  untagged_image_expiration_days = 7
-  max_tagged_images              = 30
-
-  create_ssm_parameters = true
-  ssm_parameter_prefix  = "/${var.system}/iac/ecr"
 
   tags = local.tags
 }

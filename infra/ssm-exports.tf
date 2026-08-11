@@ -57,15 +57,6 @@ resource "aws_ssm_parameter" "sqs_queue_url" {
   tags = local.tags
 }
 
-resource "aws_ssm_parameter" "registry_url" {
-  name        = "${local.ssm_prefix}/ecr/registry-url"
-  description = "URL base do registry ECR — alvo do docker login nas esteiras."
-  type        = "String"
-  value       = module.ecr.registry_url
-
-  tags = local.tags
-}
-
 resource "aws_ssm_parameter" "karpenter_chart_version" {
   name        = "${local.ssm_prefix}/karpenter/chart-version"
   description = "Versão do chart do Karpenter compatível com a versão do cluster."

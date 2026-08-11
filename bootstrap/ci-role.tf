@@ -57,7 +57,7 @@ resource "aws_iam_role" "ci" {
   description        = "Role OIDC das esteiras dos microsserviços para publicar no ECR"
   assume_role_policy = data.aws_iam_policy_document.ci_assume.json
 
-  tags = merge(local.tags, { Name = var.ci_role_name })
+  tags = { System = var.system, Name = var.ci_role_name }
 }
 
 resource "aws_iam_role_policy" "ci_ecr" {
