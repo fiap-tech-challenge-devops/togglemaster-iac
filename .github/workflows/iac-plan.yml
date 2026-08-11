@@ -37,6 +37,10 @@ env:
   AWS_REGION: ${{ inputs.region || 'us-east-1' }}
   TF_IN_AUTOMATION: "true"
   TF_VERSION: "1.15.8"
+  # Modelo do resumo do plano. gpt-5.6-terra equilibra qualidade e custo
+  # (US$ 2,00/US$ 12,00 por 1M de tokens). Alternativas: gpt-5.6-sol, mais caro
+  # e mais capaz; gpt-5.6-luna, cerca de 10x mais barato. Trocar aqui basta.
+  OPENAI_MODEL: "gpt-5.6-terra"
 
 jobs:
   validate:
@@ -144,13 +148,150 @@ jobs:
             -backend-config="use_lockfile=true"
 
       # -lock=false: plan não altera o state, e sem lock um PR não bloqueia outro.
+      #
+      # -out=tfplan grava o plano binário. Ele NÃO é aplicado depois nem vira
+      # artifact — some com o runner. Serve só para o "terraform show -json" do
+      # step seguinte, que de outro modo exigiria planejar duas vezes.
       - name: Terraform plan
         id: plan
         working-directory: ${{ matrix.stage }}
         continue-on-error: ${{ !matrix.required }}
         run: |
-          terraform plan -input=false -lock=false -no-color 2>&1 | tee plan.txt
+          terraform plan -input=false -lock=false -no-color -out=tfplan 2>&1 | tee plan.txt
           exit "${PIPESTATUS[0]}"
+
+      # ── Resumo por IA ───────────────────────────────────────────────────────
+      #
+      # Informativo, nunca um gate. O plano completo continua sendo apresentado
+      # exatamente como antes, logo abaixo; isto só acrescenta uma leitura em
+      # português por cima. Daí o continue-on-error: uma indisponibilidade da API
+      # do fornecedor não pode reprovar um PR de infraestrutura.
+      #
+      # Só no infra: o plan do addons falha enquanto o infra não estiver
+      # aplicado, e resumir uma falha não ajuda ninguém.
+      - name: Resumo do plano por IA
+        id: resumo_ia
+        if: matrix.stage == 'infra' && steps.plan.outcome == 'success'
+        continue-on-error: true
+        working-directory: ${{ matrix.stage }}
+        env:
+          # OPENAI_MODEL vem do env do workflow, herdado automaticamente.
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${OPENAI_API_KEY:-}" ]; then
+            echo "Secret OPENAI_API_KEY ausente — resumo ignorado."
+            exit 0
+          fi
+
+          # 1. Reduzir o plano a ESTRUTURA PURA.
+          #
+          # Este é o passo que torna o resto seguro. "terraform show -json" não
+          # redige nada: as três senhas do RDS e o conteúdo do Secrets Manager
+          # saem em texto claro, ao lado do próprio "sensitive": true. Só o
+          # "terraform show" humano redige.
+          #
+          # O filtro abaixo descarta todos os VALORES e mantém endereço, tipo,
+          # ação e os NOMES dos atributos que mudam. É isso, e só isso, que
+          # atravessa a fronteira da máquina.
+          terraform show -json tfplan > plan.json
+
+          jq '
+            def atributos_alterados($antes; $depois; $desconhecido):
+              ( [ $depois | keys_unsorted[] | select($antes[.] != $depois[.]) ]
+                + [ $desconhecido | keys_unsorted[] ]
+              ) | unique;
+
+            {
+              contagem: (
+                [ .resource_changes[]?
+                  | select(.change.actions != ["no-op"])
+                  | .change.actions | join("+")
+                ]
+                | group_by(.)
+                | map({ acao: .[0], quantidade: length })
+              ),
+              recursos: [
+                .resource_changes[]?
+                | select(.change.actions != ["no-op"])
+                | {
+                    endereco: .address,
+                    tipo: .type,
+                    acoes: .change.actions,
+                    atributos: atributos_alterados(
+                      .change.before // {};
+                      .change.after // {};
+                      .change.after_unknown // {}
+                    )
+                  }
+              ],
+              outputs: [
+                (.output_changes // {})
+                | to_entries[]
+                | select(.value.actions != ["no-op"])
+                | { nome: .key, acoes: .value.actions }
+              ]
+            }
+          ' plan.json > plan-estrutura.json
+
+          # Plano sem mudança nenhuma: não há o que resumir.
+          if [ "$(jq '.recursos | length' plan-estrutura.json)" = "0" ] \
+             && [ "$(jq '.outputs | length' plan-estrutura.json)" = "0" ]; then
+            echo "Nenhuma mudança no plano — resumo dispensado."
+            exit 0
+          fi
+
+          # 2. Montar o corpo do request com jq, nunca por interpolação de
+          #    string: o JSON reduzido precisa ser escapado corretamente.
+          #
+          # Responses API (/v1/responses), não o antigo /v1/chat/completions —
+          # a documentação da OpenAI recomenda o primeiro para geração de texto.
+          # A instrução vai dentro do próprio "input": um request de um turno só
+          # não ganha nada em separá-la.
+          jq -n --rawfile estrutura plan-estrutura.json --arg modelo "$OPENAI_MODEL" '{
+            model: $modelo,
+            input: (
+              "Você resume planos do Terraform para quem vai revisar um pull request de infraestrutura. Escreva em português do Brasil, em Markdown, sem cabeçalho de nível 1 ou 2. Você recebe apenas a ESTRUTURA do plano: endereços, tipos, ações e nomes de atributos — nunca os valores. Não invente valores nem especule sobre o que eles são. Comece por uma frase única dizendo o que este plano faz. Depois, no máximo cinco bullets cobrindo: o que é criado, alterado ou destruído de mais relevante; qualquer substituição (delete+create) e por que ela chama atenção; e o que merece atenção do revisor — perda de dados, indisponibilidade, mudança em rede ou IAM. Agrupe recursos repetitivos em vez de listar um por um. Se nada for arriscado, diga isso em vez de inventar risco.\n\n"
+              + "Estrutura do plano do stage `infra`:\n\n```json\n" + $estrutura + "\n```"
+            )
+          }' > request.json
+
+          # 3. Chamar a API.
+          HTTP=$(curl -sS -o resposta.json -w '%{http_code}' \
+            https://api.openai.com/v1/responses \
+            -H "content-type: application/json" \
+            -H "authorization: Bearer ${OPENAI_API_KEY}" \
+            --data @request.json) || true
+
+          if [ "$HTTP" != "200" ]; then
+            echo "API respondeu HTTP $HTTP — resumo ignorado."
+            jq -r '.error.message? // "sem detalhe"' resposta.json 2>/dev/null || true
+            exit 0
+          fi
+
+          # O array "output" pode trazer outros itens além da mensagem (blocos de
+          # raciocínio, chamadas de ferramenta). Filtrar por tipo, em vez de pegar
+          # output[0].content[0], evita gravar o item errado quando isso acontece.
+          jq -r '
+            [ .output[]?
+              | select(.type == "message")
+              | .content[]?
+              | select(.type == "output_text")
+              | .text
+            ] | join("\n")
+          ' resposta.json > resumo-ia.md
+
+          # Testar conteúdo, não tamanho: "jq -r" sobre resultado vazio grava uma
+          # quebra de linha, e [ -s ] considera 1 byte como arquivo preenchido —
+          # o resumo sairia como um bloco em branco com o rodapé embaixo.
+          # Apagar o arquivo é o que faz os dois steps seguintes o ignorarem.
+          if grep -q '[^[:space:]]' resumo-ia.md 2>/dev/null; then
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          else
+            rm -f resumo-ia.md
+            echo "Resposta sem texto — resumo ignorado."
+          fi
 
       # Em disparo manual não há PR para comentar — o plano vai para o resumo do run.
       - name: Resumo do plano
@@ -174,6 +315,14 @@ jobs:
             echo ""
             if [ -n "$NOTA" ]; then
               echo "$NOTA"
+              echo ""
+            fi
+            # O resumo entra ACIMA do plano, não no lugar dele: quem quiser
+            # conferir continua com a saída íntegra logo abaixo.
+            if [ -s "${{ matrix.stage }}/resumo-ia.md" ]; then
+              cat "${{ matrix.stage }}/resumo-ia.md"
+              echo ""
+              echo "_Resumo gerado por IA a partir da estrutura do plano. O plano abaixo é a fonte da verdade._"
               echo ""
             fi
             echo '<details><summary>Ver plano</summary>'
@@ -203,6 +352,17 @@ jobs:
               plan = 'Nenhuma saída de plan — o step não chegou a executar.';
             }
 
+            // Opcional por definição: só o infra gera resumo, e mesmo lá ele
+            // pode faltar (secret ausente, API fora, plano sem mudanças).
+            let resumo = '';
+            try {
+              const t = fs.readFileSync(stage + '/resumo-ia.md', 'utf8').trim();
+              if (t) {
+                resumo = t + '\n\n_Resumo gerado por IA a partir da estrutura do plano. '
+                       + 'O plano abaixo é a fonte da verdade._\n';
+              }
+            } catch (e) { /* sem resumo — segue com o plano puro */ }
+
             // O corpo de um comentário tem limite de 65536 caracteres. O trecho
             // final é o que interessa (o resumo add/change/destroy).
             const LIMIT = 60000;
@@ -221,6 +381,7 @@ jobs:
             const body = [
               '### ' + icon + ' Terraform plan — `' + stage + '`',
               note,
+              resumo,
               '<details><summary>Ver plano</summary>',
               '',
               '```terraform',

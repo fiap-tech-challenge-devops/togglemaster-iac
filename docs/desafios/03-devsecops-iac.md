@@ -157,6 +157,59 @@ Registrado com a justificativa completa em [`.checkov.yaml`](../../.checkov.yaml
 
 ---
 
+## Resumo do plano por IA
+
+A saída do `terraform plan` é fiel e ilegível: centenas de linhas para descrever meia dúzia de decisões. O objetivo aqui foi **acrescentar** uma leitura em português por cima, sem tirar nada — o plano íntegro continua no mesmo `<details>` de antes.
+
+Duas restrições definiram o desenho.
+
+### É informativo, jamais um gate
+
+O step tem `continue-on-error: true` e todos os seus caminhos de erro saem com `exit 0`: secret ausente, chave inválida, cota esgotada, API indisponível, resposta sem texto, plano sem mudanças. Uma indisponibilidade da API não pode reprovar um PR de infraestrutura — quem decide o merge é o `plan`, e o resumo é conveniência.
+
+Testar esses caminhos rendeu um defeito real: `[ -s arquivo ]` testa tamanho não-zero, e `jq -r` sobre um resultado vazio grava uma quebra de linha. Um byte. A verificação passava, e uma resposta sem texto teria renderizado um bloco de resumo em branco com o rodapé embaixo. A correção testa conteúdo (`grep -q '[^[:space:]]'`) e apaga o arquivo, que é o que faz os dois steps seguintes o ignorarem.
+
+### `terraform show -json` não redige valores sensíveis
+
+Esta foi a descoberta que moldou o resto. Testado empiricamente com o provider `random`:
+
+```
+terraform show tfplan        → 3 ocorrências de "(sensitive value)"
+terraform show -json tfplan  → "senha":{"sensitive":true,"value":"615cZvPKR6Iy19FnAXEc"}
+```
+
+O valor em texto claro fica **ao lado** do próprio `"sensitive": true`. Só a saída humana redige.
+
+O detalhe temporal agrava: antes do primeiro apply, uma senha gerada é `(known after apply)` e nem aparece no plano. Depois do apply ela passa a viver no state — e aparece em **todo** plano seguinte. Ou seja, o dia em que o `infra` for aplicado é o dia em que os planos passam a carregar as três senhas do RDS.
+
+Por isso o que é enviado à API não é o plano, e sim uma redução a **estrutura pura**: endereço, tipo, ação e os *nomes* dos atributos que mudam. Nenhum valor atravessa a fronteira da máquina. A redução é um filtro `jq` no próprio step, validado contra um fixture com senhas plantadas — os valores existem no plano bruto e nenhum sobrevive.
+
+Isto também confirmou, em retrospecto, duas decisões anteriores: não subir o `tfplan` como artifact, e cifrar o bucket de state com chave gerenciada pelo cliente.
+
+### Credencial de serviço, não de pessoa física
+
+Provedores de LLM oferecem dois caminhos: um token derivado da assinatura pessoal, que sai de graça, e uma chave de API cobrada em crédito pré-pago.
+
+O primeiro é uma **credencial de pessoa física** — presa a um indivíduo, fora do controle da organização, consumindo limites pessoais, e que quebra no dia em que a pessoa sai. Numa esteira, credencial é de serviço: emitida pela organização, com escopo, teto de gasto e rotação. É a mesma lógica que já vale para a AWS aqui, e foi o que decidiu a escolha.
+
+O passo seguinte natural seria federação por OIDC, eliminando o secret estático como já foi feito com a AWS. Ficou registrado como melhoria, não implementado.
+
+### Fornecedor: OpenAI
+
+O resumo usa a **Responses API** (`/v1/responses`) da OpenAI, com `gpt-5.6-terra`. O modelo é uma variável no `env` do workflow — trocar é uma linha.
+
+Vale registrar por que não foi `/v1/chat/completions`: era o endpoint que eu conhecia de cor, e a documentação atual recomenda o Responses para geração de texto. Conferir antes de escrever evitou um endpoint legado na entrega.
+
+Um detalhe da leitura da resposta: o array `output` pode trazer itens de raciocínio **antes** da mensagem. `output[0].content[0].text` pega o item errado quando isso acontece; o filtro por `type` não.
+
+A troca de fornecedor custou pouco justamente porque a redução do plano, os gates e a apresentação não dependem de quem responde — só o corpo do request e o `jq` que lê a resposta mudaram.
+
+### Só no `infra`
+
+O `addons` lê do SSM parâmetros que só existem depois do apply do `infra`; enquanto o ambiente não subir, o plan dele falha. Resumir uma falha não ajuda ninguém.
+
+---
+
 ## Dificuldades encontradas
 
 Espaço para anotações do processo — o que travou, quanto custou e como foi contornado.
@@ -222,3 +275,9 @@ O `validate` passa mesmo se houver ciclo — ele não constrói o grafo de depen
 A primeira versão verificava se o bucket já existia e, em caso positivo, pulava o apply. Isso evitava o `BucketAlreadyOwnedByYou` da segunda execução, mas ao custo de o stage nunca aplicar mudança nenhuma — a KMS key adicionada depois jamais entraria.
 
 A causa real não era o apply: era o **state local ser descartado** a cada run. A correção foi o bootstrap migrar o próprio state para o bucket que cria, com três caminhos (`create`, `adopt`, `remote`) decididos por inspeção do que existe na AWS.
+
+### `jq` ausente na máquina local deu leituras falsas
+
+Verificações escritas com `jq ... 2>/dev/null` estavam falhando em silêncio e devolvendo "limpo" — o binário não existe no ambiente, e o `2>/dev/null` engolia o `command not found`. Conclusões tiradas dessas checagens não valiam nada.
+
+Custou refazer as verificações com `grep`, e depois baixar o `jq` para um diretório temporário só para conseguir testar o filtro de redução antes de mandá-lo para a esteira. A lição é sobre o `2>/dev/null`: ele apaga a diferença entre "rodou e não achou" e "não rodou".
