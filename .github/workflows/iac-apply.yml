@@ -31,7 +31,7 @@ concurrency:
 
 jobs:
   infra:
-    uses: fiap-tech-challenge-devops/reusable-workflows/.github/workflows/terraform-apply.yml@v1.0.0
+    uses: fiap-tech-challenge-devops/reusable-workflows/.github/workflows/terraform-apply.yml@v1.1.1
     with:
       stage: infra
       state-bucket-prefix: togglemaster-iac-tfstate
@@ -43,7 +43,7 @@ jobs:
   # needs: é o que garante a ordem. O addons lê do SSM parâmetros que o infra cria.
   addons:
     needs: infra
-    uses: fiap-tech-challenge-devops/reusable-workflows/.github/workflows/terraform-apply.yml@v1.0.0
+    uses: fiap-tech-challenge-devops/reusable-workflows/.github/workflows/terraform-apply.yml@v1.1.1
     with:
       stage: addons
       state-bucket-prefix: togglemaster-iac-tfstate
