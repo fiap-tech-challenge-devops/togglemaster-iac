@@ -136,9 +136,13 @@ Backend S3, criado pelo stage `bootstrap`. Cada stage tem sua própria chave de 
 | Pipeline | Gatilho | O que faz |
 |---|---|---|
 | `bootstrap` | manual | Cria o backend S3. Executada uma única vez na vida do projeto |
-| `plan` | Pull Request para `main` | `validate` → Trivy/Checkov → `plan` de cada stage |
+| `plan` | Pull Request para `main` | `validate` → Trivy/Checkov → `plan` de cada stage, com resumo por IA |
 | `apply` | merge em `main` | Aplica os stages na ordem `infra` → `addons` |
 | `destroy` | manual, com confirmação | Remove recursos do cluster → destrói `addons` → destrói `infra` |
+
+A esteira de `plan` vive em [`reusable-workflows`](https://github.com/fiap-tech-challenge-devops/reusable-workflows); o arquivo aqui é só o gatilho e os parâmetros. Os checks obrigatórios do ruleset carregam o prefixo do job chamador — `iac / Plan (infra)`, `iac / Security` e assim por diante.
+
+O `apply` não tem gate de aprovação: o gate é o pull request. O ruleset exige o `plan` verde, e quem aprova o PR já está decidindo aplicar, com o plano na frente para ler. O `destroy` mantém o gate, porque roda por disparo manual, sem PR e sem plano — ali o environment é a única confirmação humana.
 
 O `destroy` remove os recursos do Kubernetes **antes** de destruir a infraestrutura. Load balancers criados pelo AWS Load Balancer Controller e nós criados pelo Karpenter não estão no `tfstate`: se sobreviverem ao destroy, ficam órfãos e impedem a remoção da VPC.
 

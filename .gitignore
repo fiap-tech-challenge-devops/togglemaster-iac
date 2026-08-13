@@ -12,9 +12,9 @@ tfplan
 plan.txt
 plan.json
 
-# Derivados do plano gerados pela esteira: o JSON reduzido enviado à API e o
-# resumo devolvido por ela.
-plan-estrutura.json
+# Resumo escrito pelo action terraform-plan-summary. Os intermediários dele
+# (plan.json, estrutura.json, request.json) vivem no RUNNER_TEMP e nunca
+# encostam no checkout.
 resumo-ia.md
 
 *.tfstate
