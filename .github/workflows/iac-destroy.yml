@@ -1,11 +1,10 @@
 name: IaC — Destroy (apps → addons → infra)
 
-# A ordem importa. Load balancers criados pelo AWS Load Balancer Controller e nós
-# criados pelo Karpenter NÃO estão no tfstate: são criados por controllers dentro
-# do cluster. Se sobreviverem ao destroy, ficam órfãos e seguram a VPC — o
-# terraform destroy trava em "DependencyViolation" ao remover subnets.
+# A esteira vive em fiap-tech-challenge-devops/reusable-workflows.
+# Doc: docs/terraform-destroy/ naquele repositório.
 #
-# Por isso o primeiro stage limpa o cluster antes de qualquer terraform destroy.
+# Aqui o environment fica: o destroy roda por disparo manual, sem PR e sem plano
+# para ler antes. É a única confirmação humana no caminho.
 
 on:
   workflow_dispatch:
@@ -14,10 +13,6 @@ on:
         description: 'Digite exatamente "DESTROY" para confirmar'
         type: string
         required: true
-      region:
-        description: "Região AWS"
-        type: string
-        default: us-east-1
 
 permissions:
   id-token: write
@@ -27,162 +22,40 @@ concurrency:
   group: iac-${{ github.ref }}
   cancel-in-progress: false
 
-env:
-  AWS_REGION: ${{ inputs.region }}
-  TF_IN_AUTOMATION: "true"
-  TF_VERSION: "1.15.8"
-
 jobs:
   guard:
     name: Confirmar
     runs-on: ubuntu-latest
     steps:
-      - name: Validar confirmação
-        run: |
+      - run: |
           if [ "${{ inputs.confirm }}" != "DESTROY" ]; then
             echo "Abortado: confirm deve ser exatamente DESTROY."
             exit 1
           fi
 
-  delete-apps:
-    name: Stage 1 — limpar o cluster
-    runs-on: ubuntu-latest
+  # eks-cleanup só no primeiro da cadeia: ALBs e nós do Karpenter não estão no
+  # tfstate e, se sobreviverem, seguram a VPC.
+  addons:
     needs: guard
-    environment: production
-    steps:
-      - uses: actions/checkout@v7
+    uses: fiap-tech-challenge-devops/reusable-workflows/.github/workflows/terraform-destroy.yml@v1.0.0
+    with:
+      stage: addons
+      state-bucket-prefix: togglemaster-iac-tfstate
+      environment: production
+      eks-cleanup: true
+      eks-cluster-ssm-parameter: /togglemaster/iac/cluster-name
+      aws-region: us-east-1
+      terraform-version: "1.15.8"
+    secrets:
+      aws-oidc-role-arn: ${{ secrets.AWS_OIDC_ROLE_ARN_VITAO }}
 
-      - name: Autenticar na AWS (OIDC)
-        uses: aws-actions/configure-aws-credentials@v6
-        with:
-          role-to-assume: ${{ secrets.AWS_OIDC_ROLE_ARN_VITAO }}
-          aws-region: ${{ env.AWS_REGION }}
-
-      - uses: azure/setup-kubectl@v5
-
-      - name: Remover recursos que criam infraestrutura fora do tfstate
-        run: |
-          set -euo pipefail
-
-          CLUSTER=$(aws ssm get-parameter --name /togglemaster/iac/cluster-name \
-            --query Parameter.Value --output text 2>/dev/null || true)
-
-          if [ -z "$CLUSTER" ] || [ "$CLUSTER" == "None" ]; then
-            echo "Cluster não encontrado no SSM — nada a limpar."
-            exit 0
-          fi
-
-          if ! aws eks describe-cluster --name "$CLUSTER" >/dev/null 2>&1; then
-            echo "Cluster $CLUSTER não existe mais — nada a limpar."
-            exit 0
-          fi
-
-          aws eks update-kubeconfig --name "$CLUSTER" --region "$AWS_REGION"
-
-          # 1. Argo CD primeiro. Sem isso ele recria tudo que apagarmos a seguir.
-          echo "Removendo Applications do Argo CD..."
-          kubectl delete applications --all -n argocd --ignore-not-found --timeout=300s || true
-
-          # 2. Ingresses — cada um tem um ALB associado, provisionado pelo controller.
-          echo "Removendo Ingresses (libera os ALBs)..."
-          kubectl delete ingress --all --all-namespaces --ignore-not-found --timeout=300s || true
-
-          # 3. Services type=LoadBalancer, se houver algum (cada um é um NLB).
-          echo "Removendo Services do tipo LoadBalancer..."
-          kubectl get svc --all-namespaces \
-            -o jsonpath='{range .items[?(@.spec.type=="LoadBalancer")]}{.metadata.namespace}{" "}{.metadata.name}{"\n"}{end}' \
-            | while read -r ns name; do
-                [ -n "$name" ] && kubectl delete svc "$name" -n "$ns" --ignore-not-found || true
-              done
-
-          # 4. NodePools do Karpenter — remove as instâncias EC2 provisionadas por ele.
-          echo "Removendo NodePools do Karpenter..."
-          kubectl delete nodepools.karpenter.sh --all --ignore-not-found --timeout=600s || true
-          kubectl delete ec2nodeclasses.karpenter.k8s.aws --all --ignore-not-found --timeout=300s || true
-
-          # Dá tempo para os controllers processarem as remoções na AWS antes de o
-          # Terraform tentar apagar a VPC.
-          echo "Aguardando os controllers liberarem os recursos na AWS..."
-          sleep 90
-
-          echo "Limpeza concluída."
-
-  destroy-addons:
-    name: Stage 2 — destroy addons
-    runs-on: ubuntu-latest
-    needs: delete-apps
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Autenticar na AWS (OIDC)
-        uses: aws-actions/configure-aws-credentials@v6
-        with:
-          role-to-assume: ${{ secrets.AWS_OIDC_ROLE_ARN_VITAO }}
-          aws-region: ${{ env.AWS_REGION }}
-
-      - uses: hashicorp/setup-terraform@v4
-        with:
-          terraform_version: ${{ env.TF_VERSION }}
-
-      - name: Backend config
-        id: backend
-        run: |
-          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-          echo "bucket=togglemaster-iac-tfstate-${ACCOUNT_ID}" >> "$GITHUB_OUTPUT"
-
-      - name: Terraform init
-        working-directory: addons
-        run: |
-          terraform init -input=false \
-            -backend-config="bucket=${{ steps.backend.outputs.bucket }}" \
-            -backend-config="region=${{ env.AWS_REGION }}" \
-            -backend-config="use_lockfile=true"
-
-      - name: Terraform destroy
-        working-directory: addons
-        run: terraform destroy -input=false -auto-approve
-
-  destroy-infra:
-    name: Stage 3 — destroy infra
-    runs-on: ubuntu-latest
-    needs: destroy-addons
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Autenticar na AWS (OIDC)
-        uses: aws-actions/configure-aws-credentials@v6
-        with:
-          role-to-assume: ${{ secrets.AWS_OIDC_ROLE_ARN_VITAO }}
-          aws-region: ${{ env.AWS_REGION }}
-
-      - uses: hashicorp/setup-terraform@v4
-        with:
-          terraform_version: ${{ env.TF_VERSION }}
-
-      - name: Backend config
-        id: backend
-        run: |
-          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-          echo "bucket=togglemaster-iac-tfstate-${ACCOUNT_ID}" >> "$GITHUB_OUTPUT"
-
-      - name: Terraform init
-        working-directory: infra
-        run: |
-          terraform init -input=false \
-            -backend-config="bucket=${{ steps.backend.outputs.bucket }}" \
-            -backend-config="region=${{ env.AWS_REGION }}" \
-            -backend-config="use_lockfile=true"
-
-      - name: Terraform destroy
-        working-directory: infra
-        run: terraform destroy -input=false -auto-approve
-
-      - name: Resumo
-        if: always()
-        run: |
-          {
-            echo "### IaC — Destroy"
-            echo ""
-            echo "Ambiente removido. O bucket de state do stage \`bootstrap\`"
-            echo "permanece — ele não é gerenciado pelos stages destruídos aqui."
-          } >> "$GITHUB_STEP_SUMMARY"
+  infra:
+    needs: addons
+    uses: fiap-tech-challenge-devops/reusable-workflows/.github/workflows/terraform-destroy.yml@v1.0.0
+    with:
+      stage: infra
+      state-bucket-prefix: togglemaster-iac-tfstate
+      aws-region: us-east-1
+      terraform-version: "1.15.8"
+    secrets:
+      aws-oidc-role-arn: ${{ secrets.AWS_OIDC_ROLE_ARN_VITAO }}
