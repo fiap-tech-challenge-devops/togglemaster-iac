@@ -1,27 +1,21 @@
 name: IaC — Plan
 
-# Plano para revisão. O resultado é DESCARTADO: não vira artifact e não é
-# reaplicado depois.
+# A esteira em si vive em fiap-tech-challenge-devops/reusable-workflows. Aqui
+# ficam só o gatilho, a concorrência e os parâmetros deste projeto.
 #
-# Dois motivos. O arquivo de plano contém todos os valores dos atributos em texto
-# claro, inclusive os sensíveis (senha do RDS, conteúdo do Secrets Manager) — um
-# artifact do Actions é baixável por qualquer pessoa com leitura no repositório.
-# E um plano gerado no PR fica obsoleto assim que o state muda ou a main avança.
+# Em PR, os jobs do workflow chamado são os checks obrigatórios do ruleset da
+# main: sem todos verdes, o botão de merge fica bloqueado.
 #
-# O apply replaneja no próprio run. Ver iac-apply.yml.
+# ATENÇÃO ao nome dos checks: um workflow chamado reporta como
+# "<job do caller> / <job do chamado>". Por isso o job abaixo se chama "iac" —
+# os checks viram "iac / Plan (infra)" e afins, e o ruleset precisa listar
+# exatamente esses nomes. Trocar o nome do job aqui quebra o merge.
 
 on:
-  # Em PR, os jobs deste workflow são os checks obrigatórios do ruleset da main:
-  # sem todos verdes, o botão de merge fica bloqueado.
   pull_request:
     branches: [main]
   # Mantido para diagnóstico fora de PR.
   workflow_dispatch:
-    inputs:
-      region:
-        description: "Região AWS"
-        type: string
-        default: us-east-1
 
 permissions:
   id-token: write
@@ -33,395 +27,24 @@ concurrency:
   group: iac-plan-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
 
-env:
-  AWS_REGION: ${{ inputs.region || 'us-east-1' }}
-  TF_IN_AUTOMATION: "true"
-  TF_VERSION: "1.15.8"
-  # Modelo do resumo do plano. gpt-5.6-terra equilibra qualidade e custo
-  # (US$ 2,00/US$ 12,00 por 1M de tokens). Alternativas: gpt-5.6-sol, mais caro
-  # e mais capaz; gpt-5.6-luna, cerca de 10x mais barato. Trocar aqui basta.
-  OPENAI_MODEL: "gpt-5.6-terra"
-
 jobs:
-  validate:
-    name: Validate
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        # bootstrap fica de fora: ele é aplicado por disparo manual e raro, e não
-        # entra no fluxo de PR -> merge -> apply que este workflow protege.
-        stage: [infra, addons]
-    steps:
-      - uses: actions/checkout@v7
-
-      - uses: hashicorp/setup-terraform@v4
-        with:
-          terraform_version: ${{ env.TF_VERSION }}
-
-      - name: Terraform fmt
-        working-directory: ${{ matrix.stage }}
-        run: terraform fmt -check -recursive
-
-      # -backend=false: validate não precisa do state, e assim o job não depende
-      # de credencial AWS nem do backend existir.
-      - name: Terraform init
-        working-directory: ${{ matrix.stage }}
-        run: terraform init -backend=false -input=false
-
-      - name: Terraform validate
-        working-directory: ${{ matrix.stage }}
-        run: terraform validate
-
-  security:
-    name: Security
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-
-      # O tfsec foi descontinuado e incorporado ao Trivy — "trivy config" roda o
-      # mesmo conjunto de regras, com manutenção ativa.
+  iac:
+    name: iac
+    uses: fiap-tech-challenge-devops/reusable-workflows/.github/workflows/terraform-plan.yml@v1.0.0
+    with:
+      # bootstrap fica de fora: é aplicado por disparo manual e raro, e não entra
+      # no fluxo de PR -> merge -> apply que este workflow protege.
       #
-      # Versões fixadas em tag, nunca em branch: uma esteira que existe para
-      # barrar vulnerabilidade não deveria executar código que muda sozinho.
-      - name: Trivy (IaC misconfiguration)
-        uses: aquasecurity/trivy-action@v0.36.0
-        with:
-          scan-type: config
-          scan-ref: .
-          # A severidade e o exclude-downloaded-modules ficam em trivy.yaml — a
-          # action não expõe a segunda como input, e separar as duas confundiria.
-          trivy-config: trivy.yaml
-          exit-code: "1"
-
-      # As releases do checkov-action pararam em 2022, mas as TAGS continuam
-      # saindo — por isso a referência é a uma tag e não a @master.
-      - name: Checkov
-        uses: bridgecrewio/checkov-action@v12.3115.0
-        with:
-          directory: .
-          # framework, quiet e as exceções ficam em .checkov.yaml. Manter as
-          # exceções num arquivo dedicado, e não como skip_check aqui, é o que
-          # permite justificar cada uma por escrito ao lado da regra.
-          config_file: .checkov.yaml
-          soft_fail: false
-
-  plan:
-    name: Plan (${{ matrix.stage }})
-    runs-on: ubuntu-latest
-    needs: [validate, security]
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - stage: infra
-            required: true
-          # O addons lê do SSM parâmetros que só existem depois do apply do
-          # infra. Num ambiente ainda não provisionado o plan dele falha, e isso
-          # não deve bloquear o PR.
-          - stage: addons
-            required: false
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Autenticar na AWS (OIDC)
-        uses: aws-actions/configure-aws-credentials@v6
-        with:
-          role-to-assume: ${{ secrets.AWS_OIDC_ROLE_ARN_VITAO }}
-          aws-region: ${{ env.AWS_REGION }}
-
-      - uses: hashicorp/setup-terraform@v4
-        with:
-          terraform_version: ${{ env.TF_VERSION }}
-
-      - name: Backend config
-        id: backend
-        run: |
-          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-          echo "bucket=togglemaster-iac-tfstate-${ACCOUNT_ID}" >> "$GITHUB_OUTPUT"
-
-      - name: Terraform init
-        working-directory: ${{ matrix.stage }}
-        run: |
-          terraform init -input=false \
-            -backend-config="bucket=${{ steps.backend.outputs.bucket }}" \
-            -backend-config="region=${{ env.AWS_REGION }}" \
-            -backend-config="use_lockfile=true"
-
-      # -lock=false: plan não altera o state, e sem lock um PR não bloqueia outro.
-      #
-      # -out=tfplan grava o plano binário. Ele NÃO é aplicado depois nem vira
-      # artifact — some com o runner. Serve só para o "terraform show -json" do
-      # step seguinte, que de outro modo exigiria planejar duas vezes.
-      - name: Terraform plan
-        id: plan
-        working-directory: ${{ matrix.stage }}
-        continue-on-error: ${{ !matrix.required }}
-        run: |
-          terraform plan -input=false -lock=false -no-color -out=tfplan 2>&1 | tee plan.txt
-          exit "${PIPESTATUS[0]}"
-
-      # ── Resumo por IA ───────────────────────────────────────────────────────
-      #
-      # Informativo, nunca um gate. O plano completo continua sendo apresentado
-      # exatamente como antes, logo abaixo; isto só acrescenta uma leitura em
-      # português por cima. Daí o continue-on-error: uma indisponibilidade da API
-      # do fornecedor não pode reprovar um PR de infraestrutura.
-      #
-      # Só no infra: o plan do addons falha enquanto o infra não estiver
-      # aplicado, e resumir uma falha não ajuda ninguém.
-      - name: Resumo do plano por IA
-        id: resumo_ia
-        if: matrix.stage == 'infra' && steps.plan.outcome == 'success'
-        continue-on-error: true
-        working-directory: ${{ matrix.stage }}
-        env:
-          # OPENAI_MODEL vem do env do workflow, herdado automaticamente.
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-        run: |
-          set -euo pipefail
-
-          if [ -z "${OPENAI_API_KEY:-}" ]; then
-            echo "Secret OPENAI_API_KEY ausente — resumo ignorado."
-            exit 0
-          fi
-
-          # 1. Reduzir o plano a ESTRUTURA PURA.
-          #
-          # Este é o passo que torna o resto seguro. "terraform show -json" não
-          # redige nada: as três senhas do RDS e o conteúdo do Secrets Manager
-          # saem em texto claro, ao lado do próprio "sensitive": true. Só o
-          # "terraform show" humano redige.
-          #
-          # O filtro abaixo descarta todos os VALORES e mantém endereço, tipo,
-          # ação e os NOMES dos atributos que mudam. É isso, e só isso, que
-          # atravessa a fronteira da máquina.
-          terraform show -json tfplan > plan.json
-
-          jq '
-            def atributos_alterados($antes; $depois; $desconhecido):
-              ( [ $depois | keys_unsorted[] | select($antes[.] != $depois[.]) ]
-                + [ $desconhecido | keys_unsorted[] ]
-              ) | unique;
-
-            {
-              contagem: (
-                [ .resource_changes[]?
-                  | select(.change.actions != ["no-op"])
-                  | .change.actions | join("+")
-                ]
-                | group_by(.)
-                | map({ acao: .[0], quantidade: length })
-              ),
-              recursos: [
-                .resource_changes[]?
-                | select(.change.actions != ["no-op"])
-                | {
-                    endereco: .address,
-                    tipo: .type,
-                    acoes: .change.actions,
-                    atributos: atributos_alterados(
-                      .change.before // {};
-                      .change.after // {};
-                      .change.after_unknown // {}
-                    )
-                  }
-              ],
-              outputs: [
-                (.output_changes // {})
-                | to_entries[]
-                | select(.value.actions != ["no-op"])
-                | { nome: .key, acoes: .value.actions }
-              ]
-            }
-          ' plan.json > plan-estrutura.json
-
-          # Plano sem mudança nenhuma: a mensagem é escrita aqui, sem chamar a
-          # API. Pagar uma requisição para o modelo dizer "não há mudanças",
-          # quando o jq acima já sabe disso com certeza, seria desperdício — e a
-          # resposta viria com redação variável a cada execução.
-          #
-          # Por isso este caminho não leva o rodapé de "gerado por IA": não foi.
-          if [ "$(jq '.recursos | length' plan-estrutura.json)" = "0" ] \
-             && [ "$(jq '.outputs | length' plan-estrutura.json)" = "0" ]; then
-            echo "Nenhuma mudança no plano — mensagem estática, sem chamar a API."
-            printf '%s\n' "**Nenhuma alteração.** O plano não cria, altera nem destrói recurso algum — a infraestrutura já corresponde à configuração." > resumo-ia.md
-            echo "ok=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          # 2. Montar o corpo do request com jq, nunca por interpolação de
-          #    string: o JSON reduzido precisa ser escapado corretamente.
-          #
-          # Responses API (/v1/responses), não o antigo /v1/chat/completions —
-          # a documentação da OpenAI recomenda o primeiro para geração de texto.
-          # A instrução vai dentro do próprio "input": um request de um turno só
-          # não ganha nada em separá-la.
-          jq -n --rawfile estrutura plan-estrutura.json --arg modelo "$OPENAI_MODEL" '{
-            model: $modelo,
-            input: (
-              "Você resume planos do Terraform para quem vai revisar um pull request de infraestrutura. Escreva em português do Brasil, em Markdown, sem cabeçalho de nível 1 ou 2. Você recebe apenas a ESTRUTURA do plano: endereços, tipos, ações e nomes de atributos — nunca os valores. Não invente valores nem especule sobre o que eles são. Comece por uma frase única dizendo o que este plano faz. Depois, no máximo cinco bullets cobrindo: o que é criado, alterado ou destruído de mais relevante; qualquer substituição (delete+create) e por que ela chama atenção; e o que merece atenção do revisor — perda de dados, indisponibilidade, mudança em rede ou IAM. Agrupe recursos repetitivos em vez de listar um por um. Se nada for arriscado, diga isso em vez de inventar risco.\n\n"
-              + "Estrutura do plano do stage `infra`:\n\n```json\n" + $estrutura + "\n```"
-            )
-          }' > request.json
-
-          # 3. Chamar a API.
-          HTTP=$(curl -sS -o resposta.json -w '%{http_code}' \
-            https://api.openai.com/v1/responses \
-            -H "content-type: application/json" \
-            -H "authorization: Bearer ${OPENAI_API_KEY}" \
-            --data @request.json) || true
-
-          if [ "$HTTP" != "200" ]; then
-            echo "API respondeu HTTP $HTTP — resumo ignorado."
-            jq -r '.error.message? // "sem detalhe"' resposta.json 2>/dev/null || true
-            exit 0
-          fi
-
-          # O array "output" pode trazer outros itens além da mensagem (blocos de
-          # raciocínio, chamadas de ferramenta). Filtrar por tipo, em vez de pegar
-          # output[0].content[0], evita gravar o item errado quando isso acontece.
-          jq -r '
-            [ .output[]?
-              | select(.type == "message")
-              | .content[]?
-              | select(.type == "output_text")
-              | .text
-            ] | join("\n")
-          ' resposta.json > resumo-ia.md
-
-          # Testar conteúdo, não tamanho: "jq -r" sobre resultado vazio grava uma
-          # quebra de linha, e [ -s ] considera 1 byte como arquivo preenchido —
-          # o resumo sairia como um bloco em branco com o rodapé embaixo.
-          # Apagar o arquivo é o que faz os dois steps seguintes o ignorarem.
-          if grep -q '[^[:space:]]' resumo-ia.md 2>/dev/null; then
-            # O rodapé mora no arquivo, e só neste caminho: é o único em que a
-            # resposta veio mesmo do modelo. Os steps que exibem o resumo apenas
-            # reproduzem o arquivo, sem acrescentar nada.
-            printf '\n%s\n' "_Resumo gerado por IA a partir da estrutura do plano. O plano abaixo é a fonte da verdade._" >> resumo-ia.md
-            echo "ok=true" >> "$GITHUB_OUTPUT"
-          else
-            rm -f resumo-ia.md
-            echo "Resposta sem texto — resumo ignorado."
-          fi
-
-      # Em disparo manual não há PR para comentar — o plano vai para o resumo do run.
-      - name: Resumo do plano
-        if: always()
-        env:
-          OUTCOME: ${{ steps.plan.outcome }}
-          REQUIRED: ${{ matrix.required }}
-        run: |
-          # Um "failure" no stage não obrigatório quase sempre significa que o
-          # infra ainda não foi aplicado, e não que há algo errado. Sem esta
-          # distinção, o resumo fica idêntico ao de uma falha de verdade — e daqui
-          # a algumas semanas ninguém lembra qual é qual.
-          case "$OUTCOME:$REQUIRED" in
-            success:*)     ICON="✅"; NOTA="" ;;
-            failure:false) ICON="⚠️"; NOTA="> Falha esperada enquanto o stage \`infra\` não tiver sido aplicado — o \`addons\` lê do SSM parâmetros que só existem depois dele. Não bloqueia o merge." ;;
-            *)             ICON="❌"; NOTA="" ;;
-          esac
-
-          {
-            echo "### $ICON Terraform plan — \`${{ matrix.stage }}\` ($OUTCOME)"
-            echo ""
-            if [ -n "$NOTA" ]; then
-              echo "$NOTA"
-              echo ""
-            fi
-            # O resumo entra ACIMA do plano, não no lugar dele: quem quiser
-            # conferir continua com a saída íntegra logo abaixo. O arquivo já vem
-            # pronto do step anterior, rodapé incluído quando cabe — aqui só se
-            # reproduz o conteúdo.
-            if [ -s "${{ matrix.stage }}/resumo-ia.md" ]; then
-              cat "${{ matrix.stage }}/resumo-ia.md"
-              echo ""
-            fi
-            echo '<details><summary>Ver plano</summary>'
-            echo ""
-            echo '```terraform'
-            # tail: o resumo add/change/destroy fica no fim, e o corpo do summary
-            # tem limite de 1 MB.
-            tail -c 900000 "${{ matrix.stage }}/plan.txt" 2>/dev/null || echo "sem saída de plan"
-            echo '```'
-            echo ""
-            echo '</details>'
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Comentar no PR
-        uses: actions/github-script@v9
-        if: always() && github.event_name == 'pull_request'
-        with:
-          script: |
-            const fs = require('fs');
-            const stage = '${{ matrix.stage }}';
-            const outcome = '${{ steps.plan.outcome }}';
-
-            let plan = '';
-            try {
-              plan = fs.readFileSync(stage + '/plan.txt', 'utf8');
-            } catch (e) {
-              plan = 'Nenhuma saída de plan — o step não chegou a executar.';
-            }
-
-            // Opcional por definição: só o infra gera resumo, e mesmo lá ele
-            // pode faltar (secret ausente, API fora, resposta sem texto).
-            // O arquivo já vem pronto, rodapé incluído quando cabe.
-            let resumo = '';
-            try {
-              resumo = fs.readFileSync(stage + '/resumo-ia.md', 'utf8').trim();
-            } catch (e) { /* sem resumo — segue com o plano puro */ }
-
-            // O corpo de um comentário tem limite de 65536 caracteres. O trecho
-            // final é o que interessa (o resumo add/change/destroy).
-            const LIMIT = 60000;
-            if (plan.length > LIMIT) {
-              plan = '...(truncado)...\n' + plan.slice(-LIMIT);
-            }
-
-            const icon = outcome === 'success' ? '✅'
-                       : (outcome === 'failure' && '${{ matrix.required }}' === 'false') ? '⚠️'
-                       : '❌';
-
-            const note = (outcome === 'failure' && '${{ matrix.required }}' === 'false')
-              ? '\n> Falha esperada enquanto o stage `infra` não tiver sido aplicado — o `addons` lê parâmetros do SSM criados por ele.\n'
-              : '';
-
-            const body = [
-              '### ' + icon + ' Terraform plan — `' + stage + '`',
-              note,
-              resumo,
-              '<details><summary>Ver plano</summary>',
-              '',
-              '```terraform',
-              plan,
-              '```',
-              '',
-              '</details>',
-            ].join('\n');
-
-            // Atualiza o comentário anterior do mesmo stage em vez de empilhar um
-            // novo a cada push na branch.
-            const { data: comments } = await github.rest.issues.listComments({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-            });
-            const previous = comments.find(c =>
-              c.user.type === 'Bot' && c.body.includes('Terraform plan — `' + stage + '`')
-            );
-
-            if (previous) {
-              await github.rest.issues.updateComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                comment_id: previous.id,
-                body,
-              });
-            } else {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: context.issue.number,
-                body,
-              });
-            }
+      # addons não é obrigatório: ele lê do SSM parâmetros que só existem depois
+      # do apply do infra, e num ambiente ainda não provisionado o plan dele
+      # falha — isso não deve bloquear o PR.
+      stages: >-
+        [{"stage":"infra","required":true},{"stage":"addons","required":false}]
+      summary-stage: infra
+      state-bucket-prefix: togglemaster-iac-tfstate
+      aws-region: us-east-1
+      terraform-version: "1.15.8"
+      openai-model: gpt-5.6-terra
+    secrets:
+      aws-oidc-role-arn: ${{ secrets.AWS_OIDC_ROLE_ARN_VITAO }}
+      openai-api-key: ${{ secrets.OPENAI_API_KEY }}

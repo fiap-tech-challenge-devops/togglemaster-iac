@@ -204,6 +204,30 @@ Um detalhe da leitura da resposta: o array `output` pode trazer itens de racioc�
 
 A troca de fornecedor custou pouco justamente porque a redução do plano, os gates e a apresentação não dependem de quem responde — só o corpo do request e o `jq` que lê a resposta mudaram.
 
+### A extração para CI compartilhado
+
+A esteira de plano inteira saiu deste repositório e foi para [`reusable-workflows`](https://github.com/fiap-tech-challenge-devops/reusable-workflows). O `iac-plan.yml` daqui virou um caller de ~50 linhas: gatilho, concorrência e os parâmetros do projeto.
+
+A parte interessante foi descobrir que **a peça de IA não podia ser um reusable workflow**, e o motivo não é estilo.
+
+Um `workflow_call` roda como job próprio, em runner próprio. O resumo lê o plano binário que o step anterior gravou e escreve um arquivo que os steps seguintes consomem — nada disso atravessa a fronteira entre runners. Passar o plano exigiria `upload-artifact`, e é exatamente o que o desenho recusa desde o início: `terraform show -json` não redige, e artifact é baixável por qualquer pessoa com leitura no repositório.
+
+Ou seja, uma restrição de segurança decidiu a forma da abstração. O resumo virou **composite action** (roda no mesmo runner) e o reusable workflow entrou por fora, definindo o job onde o action é chamado.
+
+A fronteira do action também foi decidida por segurança: a redução do plano e a chamada à API ficaram **juntas**. O valor da peça não é a chamada — são dez linhas de `curl`. É a garantia de que nenhum valor sai da máquina. Separar num "resuma este texto" genérico permitiria a um consumidor passar o plano bruto e vazar tudo.
+
+Dois efeitos colaterais bons: o script saiu do YAML e virou arquivo próprio (`summarize.sh`), o que o torna verificável por `bash -n` e executável em teste; e os intermediários passaram a ser escritos no `RUNNER_TEMP`, então nenhum consumidor precisa acrescentar nada ao `.gitignore` por causa do action.
+
+### Nome de check muda ao adotar reusable workflow
+
+Custou uma verificação antes de mergear, e teria custado um merge travado se passasse batido.
+
+Um workflow chamado reporta o status check como `<job do caller> / <job do chamado>`. Os cinco checks obrigatórios do ruleset — `Validate (infra)`, `Validate (addons)`, `Security`, `Plan (infra)`, `Plan (addons)` — passam a se chamar `iac / Validate (infra)` e assim por diante.
+
+O ruleset continua exigindo os nomes antigos, que ninguém mais reporta. O sintoma seria idêntico ao do `Plan (addons)` que travou em `IN_PROGRESS` naquela semana: PR verde, merge bloqueado esperando um check que não existe. Só que permanente, e em todos os PRs.
+
+O ruleset precisa ser atualizado **junto** com o merge desta mudança.
+
 ### Só no `infra`
 
 O `addons` lê do SSM parâmetros que só existem depois do apply do `infra`; enquanto o ambiente não subir, o plan dele falha. Resumir uma falha não ajuda ninguém.
