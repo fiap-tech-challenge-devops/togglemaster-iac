@@ -142,6 +142,8 @@ Backend S3, criado pelo stage `bootstrap`. Cada stage tem sua própria chave de 
 
 A esteira de `plan` vive em [`reusable-workflows`](https://github.com/fiap-tech-challenge-devops/reusable-workflows); o arquivo aqui é só o gatilho e os parâmetros. Os checks obrigatórios do ruleset carregam o prefixo do job chamador — `iac / Plan (infra)`, `iac / Security` e assim por diante.
 
+> **[docs/esteira/](docs/esteira/)** tem os diagramas: o caminho de um PR até a AWS, como os quatro repositórios se referenciam, por que os stages são três, quem autoriza o quê via OIDC, e a ordem do destroy.
+
 O `apply` não tem gate de aprovação: o gate é o pull request. O ruleset exige o `plan` verde, e quem aprova o PR já está decidindo aplicar, com o plano na frente para ler. O `destroy` mantém o gate, porque roda por disparo manual, sem PR e sem plano — ali o environment é a única confirmação humana.
 
 O `destroy` remove os recursos do Kubernetes **antes** de destruir a infraestrutura. Load balancers criados pelo AWS Load Balancer Controller e nós criados pelo Karpenter não estão no `tfstate`: se sobreviverem ao destroy, ficam órfãos e impedem a remoção da VPC.
