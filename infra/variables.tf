@@ -37,7 +37,7 @@ variable "private_subnet_cidrs" {
 variable "cluster_version" {
   description = "Versão do Kubernetes do control plane."
   type        = string
-  default     = "1.32"
+  default     = "1.34"
 }
 
 variable "node_instance_types" {
