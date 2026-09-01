@@ -115,9 +115,14 @@ resource "aws_secretsmanager_secret_version" "app_auth" {
   secret_string = jsonencode({ MASTER_KEY = random_password.master_key.result })
 }
 
+resource "random_password" "service_api_key" {
+  length  = 48
+  special = false
+}
+
 resource "aws_secretsmanager_secret" "app_evaluation" {
   name                    = "${var.system}/app/evaluation"
-  description             = "SERVICE_API_KEY do evaluation-service (valor emitido fora do Terraform)"
+  description             = "SERVICE_API_KEY do evaluation-service, semeada no banco pelo Job de migration do auth-service"
   recovery_window_in_days = 0
   kms_key_id              = aws_kms_key.app_secrets.arn
 
@@ -126,9 +131,5 @@ resource "aws_secretsmanager_secret" "app_evaluation" {
 
 resource "aws_secretsmanager_secret_version" "app_evaluation" {
   secret_id     = aws_secretsmanager_secret.app_evaluation.id
-  secret_string = jsonencode({ SERVICE_API_KEY = "placeholder" })
-
-  lifecycle {
-    ignore_changes = [secret_string]
-  }
+  secret_string = jsonencode({ SERVICE_API_KEY = "tm_key_${random_password.service_api_key.result}" })
 }
