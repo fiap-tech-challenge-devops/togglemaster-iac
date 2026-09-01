@@ -100,6 +100,13 @@ variable "argocd_helm_values" {
   default     = []
 }
 
+variable "argocd_admin_password_bcrypt" {
+  description = "Hash bcrypt da senha do usuario admin do Argo CD. Vazio, o chart gera uma senha aleatoria e a deixa em argocd-initial-admin-secret. Nunca receba a senha em texto aqui."
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
 variable "gitops_repo_url" {
   description = "Repositório que o Argo CD observa. Contém apenas os manifests dos cinco microsserviços."
   type        = string
