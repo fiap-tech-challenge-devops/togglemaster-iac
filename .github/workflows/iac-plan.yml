@@ -30,7 +30,7 @@ concurrency:
 jobs:
   iac:
     name: iac
-    uses: fiap-tech-challenge-devops/reusable-workflows/.github/workflows/terraform-plan.yml@v1.1.1
+    uses: fiap-tech-challenge-devops/reusable-workflows/.github/workflows/terraform-plan.yml@v2.2.2
     with:
       # bootstrap fica de fora: é aplicado por disparo manual e raro, e não entra
       # no fluxo de PR -> merge -> apply que este workflow protege.
