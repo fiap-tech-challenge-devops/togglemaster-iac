@@ -94,6 +94,12 @@ variable "argocd_namespace" {
   default     = "argocd"
 }
 
+variable "argocd_reconciliation_timeout" {
+  description = "Intervalo com que o Argo CD consulta o repositorio GitOps. O padrao do chart e 180s; valores menores encurtam a espera entre o merge e o sync, ao custo de mais consultas ao Git."
+  type        = string
+  default     = "30s"
+}
+
 variable "argocd_helm_values" {
   description = "Documentos YAML adicionais para o chart do Argo CD."
   type        = list(string)

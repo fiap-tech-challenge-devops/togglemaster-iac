@@ -30,6 +30,14 @@ resource "kubernetes_secret_v1" "gitops_repo" {
 }
 
 locals {
+  argocd_cm_values = [yamlencode({
+    configs = {
+      cm = {
+        "timeout.reconciliation" = var.argocd_reconciliation_timeout
+      }
+    }
+  })]
+
   argocd_admin_values = var.argocd_admin_password_bcrypt == "" ? [] : [yamlencode({
     configs = {
       secret = {
@@ -51,7 +59,7 @@ resource "helm_release" "argocd" {
   wait_for_jobs = true
   timeout       = 900
 
-  values = concat(var.argocd_helm_values, local.argocd_admin_values)
+  values = concat(var.argocd_helm_values, local.argocd_cm_values, local.argocd_admin_values)
 
   depends_on = [kubernetes_secret_v1.gitops_repo]
 }
