@@ -113,9 +113,9 @@ variable "gitops_repo_revision" {
 }
 
 variable "gitops_root_path" {
-  description = "Caminho, dentro do repositório GitOps, da Application raiz do padrão app-of-apps."
+  description = "Caminho, dentro do repositório GitOps, da Application raiz do padrão app-of-apps. Para a estrutura atual, o valor é applications, que contém o kustomization.yaml das child apps."
   type        = string
-  default     = "argocd"
+  default     = "applications"
 }
 
 variable "gitops_repo_username" {
