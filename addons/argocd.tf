@@ -29,6 +29,17 @@ resource "kubernetes_secret_v1" "gitops_repo" {
   }
 }
 
+locals {
+  argocd_admin_values = var.argocd_admin_password_bcrypt == "" ? [] : [yamlencode({
+    configs = {
+      secret = {
+        argocdServerAdminPassword      = var.argocd_admin_password_bcrypt
+        argocdServerAdminPasswordMtime = "2026-01-01T00:00:00Z"
+      }
+    }
+  })]
+}
+
 resource "helm_release" "argocd" {
   name       = "argocd"
   namespace  = kubernetes_namespace_v1.argocd.metadata[0].name
@@ -40,7 +51,7 @@ resource "helm_release" "argocd" {
   wait_for_jobs = true
   timeout       = 900
 
-  values = var.argocd_helm_values
+  values = concat(var.argocd_helm_values, local.argocd_admin_values)
 
   depends_on = [kubernetes_secret_v1.gitops_repo]
 }
