@@ -31,7 +31,7 @@ concurrency:
 
 jobs:
   infra:
-    uses: fiap-tech-challenge-devops/reusable-workflows/.github/workflows/terraform-apply.yml@v2.2.2
+    uses: fiap-tech-challenge-devops/reusable-workflows/.github/workflows/terraform-apply.yml@v2.2.3
     with:
       stage: infra
       state-bucket-prefix: togglemaster-iac-tfstate
@@ -43,12 +43,31 @@ jobs:
   # needs: é o que garante a ordem. O addons lê do SSM parâmetros que o infra cria.
   addons:
     needs: infra
-    uses: fiap-tech-challenge-devops/reusable-workflows/.github/workflows/terraform-apply.yml@v2.2.2
+    uses: fiap-tech-challenge-devops/reusable-workflows/.github/workflows/terraform-apply.yml@v2.2.3
     with:
       stage: addons
       state-bucket-prefix: togglemaster-iac-tfstate
       aws-region: us-east-1
       terraform-version: "1.15.8"
+      summary-extra: |
+        #### Acessar o Argo CD
+
+        O `argocd-server` é `ClusterIP`: o acesso é por túnel.
+
+        ```bash
+        aws eks update-kubeconfig --name eks-togglemaster --region us-east-1
+        kubectl port-forward svc/argocd-server -n argocd 8080:443
+        ```
+
+        Abra <https://localhost:8080> e aceite o certificado autoassinado.
+        Usuário `admin`; a senha está no cofre do time.
+
+        Se a senha não tiver sido definida, o Argo CD gera uma na instalação:
+
+        ```bash
+        kubectl get secret argocd-initial-admin-secret -n argocd \
+          -o jsonpath='{.data.password}' | base64 -d
+        ```
     secrets:
       aws-oidc-role-arn: ${{ secrets.AWS_OIDC_ROLE_ARN_VITAO }}
       tf-vars: ${{ secrets.TF_VARS_ADDONS }}
