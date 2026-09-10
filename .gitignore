@@ -32,6 +32,9 @@ bootstrap/backend.tf
 # Não faz parte da entrega — o repositório documenta as decisões em docs/ e README.
 */explain/
 
+# Roteiro de apresentação (uso local — não versionar).
+docs/roteiro-apresentacao-fase3.md
+
 crash.log
 override.tf
 override.tf.json
