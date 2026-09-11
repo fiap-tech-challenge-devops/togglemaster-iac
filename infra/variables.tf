@@ -16,6 +16,7 @@ variable "admin_iam_arns" {
   default = [
     "arn:aws:iam::762103020993:user/vitor.aws",
     "arn:aws:iam::762103020993:user/quebradas",
+    "arn:aws:iam::762103020993:user/felipe.lima",
   ]
 }
 
