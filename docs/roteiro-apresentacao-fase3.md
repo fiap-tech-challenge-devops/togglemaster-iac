@@ -31,11 +31,11 @@
 > gostaria de apresentar os integrantes do **Grupo 2**: eu, Felipe Lima, Vitor Prado, Thiago Saraiva,
 > Clayton Lima e Lucas Santos.
 >
-> Na Fase 3 a ordem foi: **'se não está no código, não existe'** — Ou seja, precisamos de uma infraestrutura
-> imutável em Terraform, pipelines de segurança (DevSecOps) e deploy por GitOps com ArgoCD. Por conta da
-> operação ter se tornado insustentável. Nesta demonstração vou mostrar, **funcionando**: primeiro a
-> infraestrutura como código; depois o gate de segurança barrando um erro proposital; em seguida o GitOps; e
-> por fim o ArgoCD sincronizando o cluster."
+> Bem... na Fase 3 a ordem foi: **'se não está no código, não existe'** — Ou seja, a gente precisa de uma
+> infraestrutura imutável em Terraform, com pipelines de segurança (DevSecOps) e deploy por GitOps com
+> ArgoCD. Por conta da operação ter se tornado insustentável daquilo que construímos na Fase 2. Então...
+> nesta demonstração vou mostrar, **funcionando**: primeiro a infraestrutura como código; depois o gate de
+> segurança barrando um erro proposital; em seguida o GitOps; e por fim o ArgoCD sincronizando o cluster."
 
 ---
 
@@ -47,17 +47,11 @@
 
 ### 1.1 — A estrutura (rápido)
 **🎙️ Fala:**
-> "O repositório tem **três stages**. O primeiro é o **bootstrap**: ele cria o **bucket S3 do state**
-> (criptografado com **KMS**), os **5 repositórios ECR** — um por microsserviço: auth, flag, targeting,
-> evaluation e analytics — e a **role de CI** com o **OIDC** do GitHub. Esse stage roda **manualmente e uma
-> única vez**, no começo do projeto: afinal, é o próprio bootstrap que **cria o bucket S3 onde o state fica
-> guardado**. Como esse bucket ainda não existe na primeira execução, o bootstrap precisa rodar antes de
-> tudo. Depois que o backend está criado, ele sai do fluxo do dia a dia.
->
-> Os outros dois são o **infra** (VPC, EKS, 3 RDS, Redis, SQS, DynamoDB, Secrets e IRSA) e o **addons**
-> (LB Controller, External Secrets, Karpenter, KEDA e o **ArgoCD**). Os módulos vêm de uma biblioteca
-> versionada por tag, e o **state fica remoto** — bucket S3 versionado, com **lock nativo no próprio S3**.
-> Nada de `tfstate` local."
+> "O repositório tem **três stages**. O **bootstrap** — que **já rodou** e não vou detalhar aqui — cria o
+> backend (bucket S3 do state), os 5 repositórios ECR e a role de CI; roda manualmente e só uma vez. Os
+> outros dois são o **infra** (VPC, EKS, 3 RDS, Redis, SQS, DynamoDB) e o **addons** (LB Controller,
+> External Secrets, Karpenter, KEDA e o **ArgoCD**). Os módulos vêm de uma biblioteca versionada por tag, e
+> o **state fica remoto** no S3 — nada de `tfstate` local."
 
 Mostre rapidamente as pastas `bootstrap/`, `infra/`, `addons/` e o `infra/backend.tf`.
 
