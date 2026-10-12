@@ -3,8 +3,15 @@ name: IaC — Destroy (apps → addons → infra)
 # A esteira vive em fiap-tech-challenge-devops/reusable-workflows.
 # Doc: docs/terraform-destroy/ naquele repositório.
 #
-# Aqui o environment fica: o destroy roda por disparo manual, sem PR e sem plano
-# para ler antes. É a única confirmação humana no caminho.
+# Dois gatilhos, com confirmações diferentes:
+#
+#   workflow_dispatch — exige digitar DESTROY. Sem PR e sem plano para ler
+#   antes, é a única confirmação humana no caminho.
+#
+#   schedule — rede de segurança para o dia em que ninguém lembrar de derrubar
+#   o ambiente. Não há humano para confirmar, então a confirmação é dispensada
+#   de propósito: o custo de destruir um ambiente de laboratório à noite é
+#   menor que o de deixar um EKS ligado o fim de semana inteiro.
 
 on:
   workflow_dispatch:
@@ -13,6 +20,11 @@ on:
         description: 'Digite exatamente "DESTROY" para confirmar'
         type: string
         required: true
+
+  # 04:00 UTC = 01:00 em Brasília. O cron do GitHub é sempre UTC e não conhece
+  # fuso; o Brasil não tem horário de verão desde 2019, então UTC-3 o ano todo.
+  schedule:
+    - cron: "0 4 * * *"
 
 permissions:
   id-token: write
@@ -27,8 +39,17 @@ jobs:
     name: Confirmar
     runs-on: ubuntu-latest
     steps:
-      - run: |
-          if [ "${{ inputs.confirm }}" != "DESTROY" ]; then
+      # CONFIRM vai por env, não interpolado no script: entrada de texto livre
+      # colada dentro de um shell é injeção esperando acontecer.
+      - env:
+          CONFIRM: ${{ inputs.confirm }}
+        run: |
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            echo "Disparo agendado — confirmação dispensada."
+            exit 0
+          fi
+
+          if [ "$CONFIRM" != "DESTROY" ]; then
             echo "Abortado: confirm deve ser exatamente DESTROY."
             exit 1
           fi
