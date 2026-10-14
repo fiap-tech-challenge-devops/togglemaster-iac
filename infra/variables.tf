@@ -109,3 +109,10 @@ variable "app_namespace" {
   type        = string
   default     = "togglemaster"
 }
+
+# Sem default: valor vazio criaria o secret com key vazia.
+variable "datadog_api_key" {
+  description = "API key da conta Datadog, entregue por tf-vars. Consumida pelo OTel Collector via External Secrets."
+  type        = string
+  sensitive   = true
+}
