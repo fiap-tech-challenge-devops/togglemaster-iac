@@ -138,10 +138,13 @@ resource "aws_secretsmanager_secret_version" "app_evaluation" {
 module "datadog_secret" {
   source = "github.com/fiap-tech-challenge-devops/terraform-aws-modules//secrets-manager?ref=v0.1.0"
 
-  name        = "${var.system}/datadog/api-key"
-  description = "API key da conta Datadog, consumida pelo OTel Collector"
+  name        = "${var.system}/datadog/account"
+  description = "Credenciais da conta Datadog, consumidas pelo OTel Collector"
 
-  secret_key_value = { DD_API_KEY = var.datadog_api_key }
+  secret_key_value = {
+    DD_API_KEY = var.datadog_api_key
+    DD_SITE    = var.datadog_site
+  }
 
   recovery_window_in_days = 0
   kms_key_arn             = aws_kms_key.app_secrets.arn
