@@ -133,3 +133,21 @@ resource "aws_secretsmanager_secret_version" "app_evaluation" {
   secret_id     = aws_secretsmanager_secret.app_evaluation.id
   secret_string = jsonencode({ SERVICE_API_KEY = "tm_key_${random_password.service_api_key.result}" })
 }
+
+# Único segredo cujo valor vem de fora; os outros são gerados por random_password.
+module "datadog_secret" {
+  source = "github.com/fiap-tech-challenge-devops/terraform-aws-modules//secrets-manager?ref=v0.1.0"
+
+  name        = "${var.system}/datadog/account"
+  description = "Credenciais da conta Datadog, consumidas pelo OTel Collector"
+
+  secret_key_value = {
+    DD_API_KEY = var.datadog_api_key
+    DD_SITE    = var.datadog_site
+  }
+
+  recovery_window_in_days = 0
+  kms_key_arn             = aws_kms_key.app_secrets.arn
+
+  tags = local.tags
+}

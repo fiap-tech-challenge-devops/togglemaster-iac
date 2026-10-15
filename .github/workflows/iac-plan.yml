@@ -30,7 +30,7 @@ concurrency:
 jobs:
   iac:
     name: iac
-    uses: fiap-tech-challenge-devops/reusable-workflows/.github/workflows/terraform-plan.yml@v2.2.3
+    uses: fiap-tech-challenge-devops/reusable-workflows/.github/workflows/terraform-plan.yml@v2.3.0
     with:
       # bootstrap fica de fora: é aplicado por disparo manual e raro, e não entra
       # no fluxo de PR -> merge -> apply que este workflow protege.
@@ -48,3 +48,5 @@ jobs:
     secrets:
       aws-oidc-role-arn: ${{ secrets.AWS_OIDC_ROLE_ARN_VITAO }}
       openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+      # Sem isto o plan do infra reprova: datadog_api_key não tem default.
+      tf-vars: ${{ secrets.TF_VARS_INFRA }}

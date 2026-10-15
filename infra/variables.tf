@@ -109,3 +109,17 @@ variable "app_namespace" {
   type        = string
   default     = "togglemaster"
 }
+
+# Sem default: valor vazio criaria o secret com key vazia.
+variable "datadog_api_key" {
+  description = "API key da conta Datadog, entregue por tf-vars. Consumida pelo OTel Collector via External Secrets."
+  type        = string
+  sensitive   = true
+}
+
+# Muda junto com a conta: trial novo nao cai necessariamente no mesmo site.
+variable "datadog_site" {
+  description = "Site da conta Datadog. Ex.: datadoghq.com, us5.datadoghq.com, datadoghq.eu, ap1.datadoghq.com."
+  type        = string
+  default     = "datadoghq.com"
+}
