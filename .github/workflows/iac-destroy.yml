@@ -58,7 +58,7 @@ jobs:
   # tfstate e, se sobreviverem, seguram a VPC.
   addons:
     needs: guard
-    uses: fiap-tech-challenge-devops/reusable-workflows/.github/workflows/terraform-destroy.yml@v2.2.3
+    uses: fiap-tech-challenge-devops/reusable-workflows/.github/workflows/terraform-destroy.yml@v2.4.0
     with:
       stage: addons
       state-bucket-prefix: togglemaster-iac-tfstate
@@ -72,7 +72,7 @@ jobs:
 
   infra:
     needs: addons
-    uses: fiap-tech-challenge-devops/reusable-workflows/.github/workflows/terraform-destroy.yml@v2.2.3
+    uses: fiap-tech-challenge-devops/reusable-workflows/.github/workflows/terraform-destroy.yml@v2.4.0
     with:
       stage: infra
       state-bucket-prefix: togglemaster-iac-tfstate
@@ -80,3 +80,6 @@ jobs:
       terraform-version: "1.15.8"
     secrets:
       aws-oidc-role-arn: ${{ secrets.AWS_OIDC_ROLE_ARN_VITAO }}
+      # O destroy também carrega as variáveis: sem isto, datadog_api_key
+      # reprova e o infra fica de pé depois de o addons já ter caído.
+      tf-vars: ${{ secrets.TF_VARS_INFRA }}
