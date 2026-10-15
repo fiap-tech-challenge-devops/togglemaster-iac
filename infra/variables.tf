@@ -44,28 +44,43 @@ variable "cluster_version" {
   default     = "1.34"
 }
 
+# Cinco tipos equivalentes, 2 vCPU e 8 GB cada. Em spot, um tipo só sorteia de
+# um pool só; com 5 tipos e 2 AZs são 10 pools, e a reposição quase sempre acha.
 variable "node_instance_types" {
-  description = "Tipos de instância do node group de baseline. t3.large: 2 vCPU, 8 GB, 35 pods — cabe o sistema em repouso."
+  description = "Tipos de instância do node group de baseline, todos 2 vCPU e 8 GB. Quanto mais tipos, menor o risco de interrupção em spot."
   type        = list(string)
-  default     = ["t3.large"]
+  default     = ["t3.large", "t3a.large", "m5.large", "m5a.large", "m6i.large"]
+}
+
+# SPOT no dia a dia. Vira ON_DEMAND no dia da gravação do vídeo, onde uma
+# interrupção no meio da demonstração não se distingue de defeito.
+variable "node_capacity_type" {
+  description = "Tipo de capacidade do node group de baseline: SPOT ou ON_DEMAND."
+  type        = string
+  default     = "SPOT"
+
+  validation {
+    condition     = contains(["SPOT", "ON_DEMAND"], var.node_capacity_type)
+    error_message = "node_capacity_type precisa ser SPOT ou ON_DEMAND."
+  }
 }
 
 variable "node_desired_size" {
   description = "Nós desejados no baseline."
   type        = number
-  default     = 1
+  default     = 2
 }
 
 variable "node_min_size" {
   description = "Mínimo de nós do baseline."
   type        = number
-  default     = 1
+  default     = 2
 }
 
 variable "node_max_size" {
   description = "Máximo de nós do baseline. Igual ao mínimo: quem escala é o Karpenter."
   type        = number
-  default     = 1
+  default     = 2
 }
 
 variable "karpenter_chart_version" {
