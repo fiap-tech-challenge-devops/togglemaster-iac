@@ -54,10 +54,30 @@ jobs:
             exit 1
           fi
 
-  # eks-cleanup só no primeiro da cadeia: ALBs e nós do Karpenter não estão no
-  # tfstate e, se sobreviverem, seguram a VPC.
-  addons:
+  # Primeiro da cadeia: o monitor precisa morrer antes do ambiente que ele
+  # observa, senão dispara por no-data durante a demolição.
+  #
+  # A falha dele não pode segurar a destruição do que custa: a conta é um trial
+  # e a key pode expirar. Quem tolera isso é o if do addons, porque
+  # continue-on-error não é aceito em job que chama reusable workflow.
+  datadog:
     needs: guard
+    uses: fiap-tech-challenge-devops/reusable-workflows/.github/workflows/terraform-destroy.yml@v2.4.0
+    with:
+      stage: datadog
+      state-bucket-prefix: togglemaster-iac-tfstate
+      aws-region: us-east-1
+      terraform-version: "1.15.8"
+    secrets:
+      aws-oidc-role-arn: ${{ secrets.AWS_OIDC_ROLE_ARN_VITAO }}
+      tf-vars: ${{ secrets.TF_VARS_INFRA }}
+
+  # eks-cleanup só no primeiro da cadeia da AWS: ALBs e nós do Karpenter não
+  # estão no tfstate e, se sobreviverem, seguram a VPC.
+  addons:
+    needs: [guard, datadog]
+    # Roda mesmo se o datadog falhar, mas nunca se o guard reprovar.
+    if: ${{ !cancelled() && needs.guard.result == 'success' }}
     uses: fiap-tech-challenge-devops/reusable-workflows/.github/workflows/terraform-destroy.yml@v2.4.0
     with:
       stage: addons

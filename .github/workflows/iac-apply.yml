@@ -72,3 +72,17 @@ jobs:
     secrets:
       aws-oidc-role-arn: ${{ secrets.AWS_OIDC_ROLE_ARN_VITAO }}
       tf-vars: ${{ secrets.TF_VARS_ADDONS }}
+
+  # Sem needs: não depende de AWS. Está aqui para "subir tudo" ser um disparo
+  # só; datadog/** fica fora dos paths acima, senão um monitor reconstruiria
+  # o ambiente. Ver ADR 0027.
+  datadog:
+    uses: fiap-tech-challenge-devops/reusable-workflows/.github/workflows/terraform-apply.yml@v2.4.0
+    with:
+      stage: datadog
+      state-bucket-prefix: togglemaster-iac-tfstate
+      aws-region: us-east-1
+      terraform-version: "1.15.8"
+    secrets:
+      aws-oidc-role-arn: ${{ secrets.AWS_OIDC_ROLE_ARN_VITAO }}
+      tf-vars: ${{ secrets.TF_VARS_INFRA }}

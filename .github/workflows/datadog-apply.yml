@@ -1,0 +1,33 @@
+name: Datadog — Apply
+
+# Porta cirúrgica para mudanças só de Datadog. O iac-apply.yml também tem um job
+# datadog, para "subir tudo" ser um disparo só — mas datadog/** não entra nos
+# paths dele, senão um monitor dispararia apply de infra e addons. Ver ADR 0027.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "datadog/**"
+      - ".github/workflows/datadog-apply.yml"
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: datadog-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  datadog:
+    uses: fiap-tech-challenge-devops/reusable-workflows/.github/workflows/terraform-apply.yml@v2.4.0
+    with:
+      stage: datadog
+      state-bucket-prefix: togglemaster-iac-tfstate
+      aws-region: us-east-1
+      terraform-version: "1.15.8"
+    secrets:
+      aws-oidc-role-arn: ${{ secrets.AWS_OIDC_ROLE_ARN_VITAO }}
+      tf-vars: ${{ secrets.TF_VARS_INFRA }}
