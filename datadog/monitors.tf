@@ -75,9 +75,11 @@ resource "datadog_monitor" "latencia" {
   name = "[${var.environment}] ${each.key} — p95 acima de ${each.value.latencia_ms}ms"
   type = "query alert"
 
-  # trace.*.duration é distribuição em nanossegundos.
+  # A métrica é trace.http.server.request, sem sufixo: o .duration pertence ao
+  # namespace antigo, marcado como depreciado e sem dado. É distribuição em
+  # SEGUNDOS, daí a divisão — o limiar fica em ms só para o nome ficar legível.
   query = <<-EOT
-    percentile(last_5m):p95:trace.http.server.request.duration{service:${each.key},env:${var.environment}} > ${each.value.latencia_ms * 1000000}
+    percentile(last_5m):p95:trace.http.server.request{service:${each.key},env:${var.environment}} > ${each.value.latencia_ms / 1000}
   EOT
 
   message = <<-EOT
@@ -89,7 +91,7 @@ resource "datadog_monitor" "latencia" {
   EOT
 
   monitor_thresholds {
-    critical = each.value.latencia_ms * 1000000
+    critical = each.value.latencia_ms / 1000
   }
 
   notify_no_data      = false
