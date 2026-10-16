@@ -77,6 +77,13 @@ jobs:
   # só; datadog/** fica fora dos paths acima, senão um monitor reconstruiria
   # o ambiente. Ver ADR 0027.
   datadog:
+    # Mesmo grupo do datadog-apply.yml: grupo de concorrência é escopado pelo
+    # repositório, então os dois escritores do datadog.tfstate serializam. Um
+    # commit que toque datadog/ e este arquivo dispara os dois ao mesmo tempo,
+    # e sem isto um falha em "Error acquiring the state lock".
+    concurrency:
+      group: datadog-${{ github.ref }}
+      cancel-in-progress: false
     uses: fiap-tech-challenge-devops/reusable-workflows/.github/workflows/terraform-apply.yml@v2.4.0
     with:
       stage: datadog
