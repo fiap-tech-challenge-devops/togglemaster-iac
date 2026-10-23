@@ -177,9 +177,11 @@ jobs:
         if: steps.reproduz.outputs.reproduz == 'true'
         run: |
           set -euo pipefail
-          kubectl -n "$NAMESPACE" get pods -o wide > pods.txt
-          cat pods.txt
-          ruins=$(kubectl -n "$NAMESPACE" get pods \
+          kubectl -n "$NAMESPACE" get pods -o wide
+
+          # Succeeded fora: Job de migração que terminou tem container
+          # não-pronto por definição, e viraria achado em todo incidente.
+          ruins=$(kubectl -n "$NAMESPACE" get pods --field-selector status.phase!=Succeeded \
             -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.status.phase}{" "}{range .status.containerStatuses[*]}{.ready}{" "}{.state.waiting.reason}{.lastState.terminated.reason}{" "}{end}{"\n"}{end}' \
             | grep -iE "CrashLoopBackOff|OOMKilled|ImagePull|false" | tr '\n' ';' || true)
           echo "achado=${ruins:-nenhum}" >> "$GITHUB_OUTPUT"
@@ -217,6 +219,8 @@ jobs:
         if: >-
           steps.http.outputs.causa == 'credencial' &&
           (github.event_name == 'repository_dispatch' || inputs.remediar)
+        env:
+          ALB: ${{ steps.alb.outputs.host }}
         run: |
           set -euo pipefail
 
@@ -230,6 +234,28 @@ jobs:
             echo "feito=false" >> "$GITHUB_OUTPUT"
             exit 1
           fi
+
+          # Testar o candidato antes de promover. Mover AWSCURRENT faz o AWS
+          # mover AWSPREVIOUS junto, então uma promoção às cegas queima o único
+          # degrau de rollback que existe.
+          candidata=$(aws secretsmanager get-secret-value --secret-id "$SEGREDO" \
+            --version-id "$anterior" --query SecretString --output text \
+            | jq -r .SERVICE_API_KEY)
+          echo "::add-mask::$candidata"
+
+          teste=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 \
+            "http://$ALB/flags/$FLAG_SONDA" -H "Authorization: Bearer $candidata" || echo 000)
+          echo "Candidata do AWSPREVIOUS -> $teste"
+          echo "candidata=$teste" >> "$GITHUB_OUTPUT"
+
+          case "$teste" in
+            404|200) ;;
+            *)
+              echo "O AWSPREVIOUS não autentica ($teste). Etiquetas intactas." >&2
+              echo "feito=false" >> "$GITHUB_OUTPUT"
+              exit 1
+              ;;
+          esac
 
           aws secretsmanager update-secret-version-stage --secret-id "$SEGREDO" \
             --version-stage AWSCURRENT \
@@ -304,14 +330,20 @@ jobs:
             if [ "${{ steps.reproduz.outputs.reproduz }}" = "true" ]; then
               echo "| Credencial / auth / banco (\`GET /flags\`) | ${{ steps.http.outputs.codigo }} → \`${{ steps.http.outputs.causa }}\` | ${{ steps.http.outputs.causa == 'credencial' && 'remediação' || 'descartada' }} |"
               echo "| Pods | ${{ steps.pods.outputs.achado }} | reporta |"
-              echo "| Nós | ${{ steps.nos.outputs.nao_prontos }} | reporta |"
+              echo "| Nós | ${{ steps.nos.outputs.nao_prontos }} · eventos: ${{ steps.nos.outputs.eventos }} | reporta |"
               echo "| RDS | ${{ steps.rds.outputs.fora }} | reporta |"
             fi
             echo
             if [ "${{ steps.remediacao.outputs.feito }}" = "true" ]; then
+              echo "**Candidato testado antes de promover:** chave do \`AWSPREVIOUS\` → ${{ steps.remediacao.outputs.candidata }} (autentica)"
+              echo
               echo "**Remediação:** version stage \`${{ steps.remediacao.outputs.de }}\` → \`${{ steps.remediacao.outputs.para }}\`, ESO sincronizado, pods do \`evaluation-service\` reciclados"
               echo
               echo "**Verificação:** sonda ${{ steps.verificacao.outputs.sonda }} · fluxo ${{ steps.verificacao.outputs.fluxo }} — ${{ steps.verificacao.outputs.ok == 'true' && 'resolvido' || 'NÃO resolvido, escalado' }}"
+            elif [ -n "${{ steps.remediacao.outputs.candidata }}" ]; then
+              echo "**Remediação abortada:** a chave do \`AWSPREVIOUS\` também não autentica (${{ steps.remediacao.outputs.candidata }})."
+              echo
+              echo "As etiquetas **não** foram movidas, então o degrau de rollback fica preservado. Ação humana necessária."
             elif [ "${{ steps.http.outputs.causa }}" = "credencial" ]; then
               echo "**Remediação não executada:** confirmada pela sonda, mas o disparo manual veio sem \`remediar\`."
             else
@@ -334,6 +366,8 @@ jobs:
             texto=":mag: *$SERVICO — alerta não reproduz*\nO monitor disparou, mas \`/evaluate\` responde 200. Nada remediado."
           elif [ "${{ steps.remediacao.outputs.feito }}" = "true" ]; then
             texto=":warning: *$SERVICO — remediação executada, sem confirmação*\nSonda ${{ steps.verificacao.outputs.sonda }}, fluxo ${{ steps.verificacao.outputs.fluxo }}. Precisa de olho humano."
+          elif [ -n "${{ steps.remediacao.outputs.candidata }}" ] && [ "${{ steps.remediacao.outputs.feito }}" != "true" ]; then
+            texto=":no_entry: *$SERVICO — rollback sem candidato confiável*\nA chave do AWSPREVIOUS também não autentica (${{ steps.remediacao.outputs.candidata }}). Nada foi movido, o degrau de rollback está preservado."
           else
             texto=":question: *$SERVICO — diagnosticado, sem remediação*\nCausa apontada: \`${{ steps.http.outputs.causa }}\`. Nenhuma remediação automática cobre isso."
           fi
