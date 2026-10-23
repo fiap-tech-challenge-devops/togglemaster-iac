@@ -40,7 +40,21 @@ Fixar em tag e não em `main` é deliberado: a biblioteca é compartilhada, e um
 bootstrap/    # state remoto, repositórios ECR e a role de CI
 infra/        # rede, cluster, bancos, mensageria, identidades
 addons/       # componentes que rodam dentro do cluster, incluindo o Argo CD
+datadog/      # monitores e integrações do Datadog, state independente
 ```
+
+### O que aqui não é Terraform
+
+Dois conteúdos operacionais moram neste repositório porque suas dependências estão aqui — a role assumida por OIDC, o access entry no cluster e os segredos que eles tocam:
+
+```
+scripts/demo/                      # gerador de tráfego para a demonstração
+.github/workflows/self-healing.yml # remediação disparada por webhook do Datadog
+```
+
+**Os workflows com prefixo `iac-` são as esteiras de stage**, e só eles. Automação operacional não leva o prefixo, para que `plan`, `apply` e `destroy` nunca sejam confundidos com remediação.
+
+O porquê de não haver repositório separado para isso está em [0031](https://github.com/fiap-tech-challenge-devops/.github/blob/main/docs/decisoes/0031-self-healing-mora-no-iac.md), junto do gatilho que faria a extração valer a pena.
 
 ## Pré-requisitos manuais
 
