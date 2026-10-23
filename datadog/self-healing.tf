@@ -1,8 +1,11 @@
 locals {
   # Só o monitor de taxa de erro do evaluation-service aciona o webhook: é a
   # única falha com remediação ligada. Ver ADR 0032.
+  #
+  # Em linha própria: handle colado numa URL corre risco de ser absorvido pelo
+  # parser, e a falha seria o webhook nunca disparar, em silêncio.
   remediacao = {
-    "evaluation-service" = "@webhook-${datadog_webhook.self_healing.name}"
+    "evaluation-service" = "\n\n@webhook-${datadog_webhook.self_healing.name}"
   }
 }
 

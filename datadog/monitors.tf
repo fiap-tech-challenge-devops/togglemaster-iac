@@ -49,7 +49,7 @@ resource "datadog_monitor" "taxa_de_erro" {
 
     Ele ${each.value.papel}, e ${each.value.impacto}.
 
-    Traces: https://app.${var.datadog_site}/apm/services/${each.key}?env=${var.environment}${local.notify} ${lookup(local.remediacao, each.key, "")}
+    Traces: https://app.${var.datadog_site}/apm/services/${each.key}?env=${var.environment}${local.notify}${lookup(local.remediacao, each.key, "")}
   EOT
 
   monitor_thresholds {
