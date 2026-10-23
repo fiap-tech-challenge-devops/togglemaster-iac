@@ -43,3 +43,23 @@ variable "notification_targets" {
   type        = string
   default     = ""
 }
+
+variable "github_org" {
+  description = "Organização que hospeda o workflow de self-healing."
+  type        = string
+  default     = "fiap-tech-challenge-devops"
+}
+
+variable "github_repo" {
+  description = "Repositório que hospeda o workflow de self-healing."
+  type        = string
+  default     = "togglemaster-iac"
+}
+
+# PAT de escopo repository_dispatch. Credencial de longa duração fora da IaC,
+# na lista de pré-requisitos manuais — ver ADRs 0021 e 0030.
+variable "github_dispatch_token" {
+  description = "Token usado pelo webhook do Datadog para disparar o repository_dispatch."
+  type        = string
+  sensitive   = true
+}
