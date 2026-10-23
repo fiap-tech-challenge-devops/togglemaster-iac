@@ -378,16 +378,23 @@ jobs:
           set -euo pipefail
           run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
 
+          # printf -v, não atribuição direta: "\n" entre aspas duplas no bash é
+          # barra-invertida seguida de n, e chegava literal no Slack.
+          #
+          # shellcheck disable=SC2016  # as crases são markdown do Slack, não expansão
           if [ "${{ steps.verificacao.outputs.ok }}" = "true" ]; then
-            texto=":wrench: *$SERVICO — remediado automaticamente*\nCausa: credencial inválida no AWSCURRENT\nAção: version stage revertido, ESO sincronizado, pods reciclados\nVerificado: fluxo 200"
+            printf -v texto ':wrench: *%s — remediado automaticamente*\nCausa: credencial inválida no AWSCURRENT\nAção: version stage revertido, ESO sincronizado, pods reciclados\nVerificado: fluxo 200' "$SERVICO"
           elif [ "${{ steps.reproduz.outputs.reproduz }}" = "false" ]; then
-            texto=":mag: *$SERVICO — alerta não reproduz*\nO monitor disparou, mas \`/evaluate\` responde 200. Nada remediado."
+            printf -v texto ':mag: *%s — alerta não reproduz*\nO monitor disparou, mas `/evaluate` responde 200. Nada remediado.' "$SERVICO"
           elif [ "${{ steps.remediacao.outputs.feito }}" = "true" ]; then
-            texto=":warning: *$SERVICO — remediação executada, sem confirmação*\nSonda ${{ steps.verificacao.outputs.sonda }}, fluxo ${{ steps.verificacao.outputs.fluxo }}. Precisa de olho humano."
-          elif [ -n "${{ steps.remediacao.outputs.candidata }}" ] && [ "${{ steps.remediacao.outputs.feito }}" != "true" ]; then
-            texto=":no_entry: *$SERVICO — rollback sem candidato confiável*\nA chave do AWSPREVIOUS também não autentica (${{ steps.remediacao.outputs.candidata }}). Nada foi movido, o degrau de rollback está preservado."
+            printf -v texto ':warning: *%s — remediação executada, sem confirmação*\nSonda %s, fluxo %s. Precisa de olho humano.' \
+              "$SERVICO" "${{ steps.verificacao.outputs.sonda }}" "${{ steps.verificacao.outputs.fluxo }}"
+          elif [ -n "${{ steps.remediacao.outputs.candidata }}" ]; then
+            printf -v texto ':no_entry: *%s — rollback sem candidato confiável*\nA chave do AWSPREVIOUS também não autentica (%s). Nada foi movido, o degrau de rollback está preservado.' \
+              "$SERVICO" "${{ steps.remediacao.outputs.candidata }}"
           else
-            texto=":question: *$SERVICO — diagnosticado, sem remediação*\nCausa apontada: \`${{ steps.http.outputs.causa }}\`. Nenhuma remediação automática cobre isso."
+            printf -v texto ':question: *%s — diagnosticado, sem remediação*\nCausa apontada: `%s`. Nenhuma remediação automática cobre isso.' \
+              "$SERVICO" "${{ steps.http.outputs.causa }}"
           fi
 
           curl -sS -X POST "$SLACK_WEBHOOK" -H 'Content-type: application/json' \
