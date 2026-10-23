@@ -338,7 +338,7 @@ jobs:
           {
             echo "### Triagem — ${SERVICO:-?}"
             echo
-            echo "**Monitor:** $MONITOR  "
+            echo "**Origem:** $MONITOR  "
             echo "**Ciclo:** \`$CICLO\` · $TENTATIVA  "
             [ -n "$LINK" ] && echo "**Alerta:** $LINK  "
             echo
@@ -384,19 +384,41 @@ jobs:
           # shellcheck disable=SC2016  # as crases são markdown do Slack, não expansão
           if [ "${{ steps.verificacao.outputs.ok }}" = "true" ]; then
             printf -v texto ':wrench: *%s — remediado automaticamente*\nCausa: credencial inválida no AWSCURRENT\nAção: version stage revertido, ESO sincronizado, pods reciclados\nVerificado: fluxo 200' "$SERVICO"
+
           elif [ "${{ steps.reproduz.outputs.reproduz }}" = "false" ]; then
-            printf -v texto ':mag: *%s — alerta não reproduz*\nO monitor disparou, mas `/evaluate` responde 200. Nada remediado.' "$SERVICO"
+            printf -v texto ':mag: *%s — falha não se confirma*\nO monitor disparou, mas `/evaluate` responde 200. Nada remediado.' "$SERVICO"
+
           elif [ "${{ steps.remediacao.outputs.feito }}" = "true" ]; then
-            printf -v texto ':warning: *%s — remediação executada, sem confirmação*\nSonda %s, fluxo %s. Precisa de olho humano.' \
-              "$SERVICO" "${{ steps.verificacao.outputs.sonda }}" "${{ steps.verificacao.outputs.fluxo }}"
+            # Nomear o que cada número significa: o valor da verificação em duas
+            # medidas é dizer qual das duas falhou, e só o número não diz.
+            case "${{ steps.verificacao.outputs.sonda }}" in
+              404|200) cred="corrigida" ;;
+              *)       cred="ainda inválida" ;;
+            esac
+            if [ "${{ steps.verificacao.outputs.fluxo }}" = "200" ]; then
+              entrega="ok"
+            else
+              entrega="ainda falhando"
+            fi
+            printf -v texto ':warning: *%s — remediação não surtiu efeito*\nCredencial: %s (%s)\nEntrega: %s (%s)\nProcure a causa fora da credencial.' \
+              "$SERVICO" "$cred" "${{ steps.verificacao.outputs.sonda }}" "$entrega" "${{ steps.verificacao.outputs.fluxo }}"
+
           elif [ -n "${{ steps.remediacao.outputs.candidata }}" ]; then
-            printf -v texto ':no_entry: *%s — rollback sem candidato confiável*\nA chave do AWSPREVIOUS também não autentica (%s). Nada foi movido, o degrau de rollback está preservado.' \
+            printf -v texto ':no_entry: *%s — rollback impossível: chave anterior também inválida*\nA chave do AWSPREVIOUS respondeu %s. Nenhuma etiqueta foi movida — o segredo está como estava.' \
               "$SERVICO" "${{ steps.remediacao.outputs.candidata }}"
+
           else
-            printf -v texto ':question: *%s — diagnosticado, sem remediação*\nCausa apontada: `%s`. Nenhuma remediação automática cobre isso.' \
-              "$SERVICO" "${{ steps.http.outputs.causa }}"
+            case "${{ steps.http.outputs.causa }}" in
+              banco-do-flag-service) explica="O banco do flag-service está devolvendo erro." ;;
+              auth-service-fora)     explica="O auth-service não está respondendo." ;;
+              auth-service-lento)    explica="O auth-service estourou o timeout de 3s." ;;
+              nenhuma)               explica="As sondas não apontaram causa conhecida." ;;
+              *)                     explica="Resposta inesperada das sondas." ;;
+            esac
+            printf -v texto ':question: *%s — causa identificada, sem correção automática*\nCausa: `%s`\n%s' \
+              "$SERVICO" "${{ steps.http.outputs.causa }}" "$explica"
           fi
 
           curl -sS -X POST "$SLACK_WEBHOOK" -H 'Content-type: application/json' \
             --data "$(jq -n --arg t "$texto" --arg m "$MONITOR" --arg u "$run_url" \
-              '{text: ($t + "\nMonitor: " + $m + "\n<" + $u + "|ver triagem>")}')"
+              '{text: ($t + "\nOrigem: " + $m + "\n<" + $u + "|ver triagem>")}')"
