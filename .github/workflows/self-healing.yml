@@ -271,8 +271,12 @@ jobs:
 
           # delete pod, não rollout restart: o selfHeal do Argo CD trata
           # restart como drift. A chave é lida só no boot do contêiner.
-          kubectl delete pod -n "$NAMESPACE" -l app=evaluation-service
-          kubectl rollout status deploy/evaluation-service -n "$NAMESPACE" --timeout=180s
+          # Um pod por vez: deletar os dois juntos zera os targets saudáveis do
+          # ALB e troca "respondendo erro" por "indisponível", o que é pior.
+          for pod in $(kubectl -n "$NAMESPACE" get pods -l app=evaluation-service -o name); do
+            kubectl delete "$pod" -n "$NAMESPACE"
+            kubectl rollout status deploy/evaluation-service -n "$NAMESPACE" --timeout=120s
+          done
 
           {
             echo "feito=true"
@@ -292,21 +296,35 @@ jobs:
             | jq -r .SERVICE_API_KEY)
           echo "::add-mask::$key"
 
-          sonda=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 \
-            "http://$ALB/flags/$FLAG_SONDA" -H "Authorization: Bearer $key" || echo 000)
-          fluxo=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 \
-            "http://$ALB/evaluate?user_id=sonda-self-healing&flag_name=$FLAG_REAL" || echo 000)
+          # Com orçamento: o registro dos targets novos no ALB leva mais tempo
+          # que o Ready do pod, então medir uma vez só é corrida por construção.
+          ok=false
+          for tentativa in $(seq 1 12); do
+            sonda=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 \
+              "http://$ALB/flags/$FLAG_SONDA" -H "Authorization: Bearer $key" || echo 000)
+            fluxo=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 \
+              "http://$ALB/evaluate?user_id=sonda-self-healing&flag_name=$FLAG_REAL" || echo 000)
+            echo "tentativa $tentativa/12: sonda=$sonda fluxo=$fluxo"
 
-          echo "sonda=$sonda fluxo=$fluxo"
-          echo "sonda=$sonda" >> "$GITHUB_OUTPUT"
-          echo "fluxo=$fluxo" >> "$GITHUB_OUTPUT"
+            case "$sonda" in
+              404|200) autenticou=true ;;
+              *)       autenticou=false ;;
+            esac
+            if [ "$autenticou" = true ] && [ "$fluxo" = "200" ]; then
+              ok=true
+              break
+            fi
+            sleep 10
+          done
 
-          if [ "$sonda" = "404" ] && [ "$fluxo" = "200" ]; then
-            echo "ok=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "ok=false" >> "$GITHUB_OUTPUT"
-            exit 1
-          fi
+          {
+            echo "sonda=$sonda"
+            echo "fluxo=$fluxo"
+            echo "tentativas=$tentativa"
+            echo "ok=$ok"
+          } >> "$GITHUB_OUTPUT"
+
+          [ "$ok" = true ] || exit 1
 
       - name: Relatório
         if: always()
@@ -339,7 +357,7 @@ jobs:
               echo
               echo "**Remediação:** version stage \`${{ steps.remediacao.outputs.de }}\` → \`${{ steps.remediacao.outputs.para }}\`, ESO sincronizado, pods do \`evaluation-service\` reciclados"
               echo
-              echo "**Verificação:** sonda ${{ steps.verificacao.outputs.sonda }} · fluxo ${{ steps.verificacao.outputs.fluxo }} — ${{ steps.verificacao.outputs.ok == 'true' && 'resolvido' || 'NÃO resolvido, escalado' }}"
+              echo "**Verificação:** sonda ${{ steps.verificacao.outputs.sonda }} · fluxo ${{ steps.verificacao.outputs.fluxo }} em ${{ steps.verificacao.outputs.tentativas }} tentativa(s) — ${{ steps.verificacao.outputs.ok == 'true' && 'resolvido' || 'NÃO resolvido, escalado' }}"
             elif [ -n "${{ steps.remediacao.outputs.candidata }}" ]; then
               echo "**Remediação abortada:** a chave do \`AWSPREVIOUS\` também não autentica (${{ steps.remediacao.outputs.candidata }})."
               echo
