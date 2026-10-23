@@ -9,14 +9,25 @@ locals {
   }
 }
 
+# O PAT como variável secreta, não literal no header: com is_secret o painel
+# mostra mascarado e a API não devolve o valor. Literal, ele fica legível para
+# qualquer pessoa com acesso de leitura às integrações.
+resource "datadog_webhook_custom_variable" "github_dispatch_token" {
+  name      = "GITHUB_DISPATCH_TOKEN"
+  value     = var.github_dispatch_token
+  is_secret = true
+}
+
 resource "datadog_webhook" "self_healing" {
   name      = "self-healing"
   url       = "https://api.github.com/repos/${var.github_org}/${var.github_repo}/dispatches"
   encode_as = "json"
 
+  # format() em vez da string literal para criar a dependência explícita: o
+  # webhook não pode existir antes da variável que ele referencia.
   custom_headers = jsonencode({
     "Accept"        = "application/vnd.github+json"
-    "Authorization" = "Bearer ${var.github_dispatch_token}"
+    "Authorization" = format("Bearer $%s", datadog_webhook_custom_variable.github_dispatch_token.name)
   })
 
   # A transição vai no payload porque o webhook também dispara em Recovered,
