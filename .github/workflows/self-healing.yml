@@ -1,0 +1,343 @@
+name: Self-healing
+
+# Remediação disparada por webhook do Datadog. Não é esteira de stage, por isso
+# não leva o prefixo iac-. Ver ADRs 0030, 0031 e 0032.
+
+run-name: >-
+  Self-healing · ${{ github.event.client_payload.servico || inputs.servico || 'manual' }}
+  · ciclo ${{ github.event.client_payload.ciclo || 'manual' }}
+
+on:
+  repository_dispatch:
+    types: [datadog-alert]
+  workflow_dispatch:
+    inputs:
+      servico:
+        description: Serviço a triar
+        default: evaluation-service
+      remediar:
+        description: Remediar se a sonda confirmar (desmarcado = só diagnostica)
+        type: boolean
+        default: false
+
+permissions:
+  id-token: write
+  contents: read
+  actions: read
+
+concurrency:
+  group: self-healing-${{ github.event.client_payload.ciclo || github.run_id }}
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: us-east-1
+  CLUSTER: eks-togglemaster
+  NAMESPACE: togglemaster
+  SEGREDO: togglemaster/app/evaluation
+  FLAG_SONDA: sonda-self-healing-inexistente
+  FLAG_REAL: nova-home
+  MAX_TENTATIVAS: 2
+
+jobs:
+  porteiro:
+    name: Porteiro
+    runs-on: ubuntu-latest
+    outputs:
+      prosseguir: ${{ steps.decide.outputs.prosseguir }}
+      motivo: ${{ steps.decide.outputs.motivo }}
+    steps:
+      - name: Transição e disjuntor
+        id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENTO: ${{ github.event_name }}
+          TRANSICAO: ${{ github.event.client_payload.transicao }}
+          CICLO: ${{ github.event.client_payload.ciclo }}
+        run: |
+          set -euo pipefail
+
+          if [ "$EVENTO" = "workflow_dispatch" ]; then
+            echo "prosseguir=true"   >> "$GITHUB_OUTPUT"
+            echo "motivo=disparo manual" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # O webhook também dispara em Recovered, Renotify, Warn e No Data.
+          # Sem este filtro a remediação rodaria na recuperação do monitor.
+          case "$TRANSICAO" in
+            Triggered|Re-Triggered) ;;
+            *)
+              echo "prosseguir=false" >> "$GITHUB_OUTPUT"
+              echo "motivo=transição '$TRANSICAO' não é disparo" >> "$GITHUB_OUTPUT"
+              exit 0
+              ;;
+          esac
+
+          # Disjuntor por ciclo do alerta, contado no histórico de runs: diz
+          # "duas tentativas para este incidente", não "duas em N minutos".
+          gh api --paginate \
+            "repos/$GITHUB_REPOSITORY/actions/workflows/self-healing.yml/runs?per_page=100" \
+            > runs.json
+          anteriores=$(jq --arg c "$CICLO" --argjson eu "$GITHUB_RUN_ID" \
+            '[.workflow_runs[] | select(.id != $eu) | select(.display_title | contains($c))] | length' \
+            runs.json)
+
+          echo "Tentativas anteriores para o ciclo $CICLO: $anteriores"
+
+          if [ "$anteriores" -ge "$MAX_TENTATIVAS" ]; then
+            echo "prosseguir=false" >> "$GITHUB_OUTPUT"
+            echo "motivo=disjuntor aberto — $anteriores tentativas neste incidente" >> "$GITHUB_OUTPUT"
+          else
+            echo "prosseguir=true" >> "$GITHUB_OUTPUT"
+            echo "motivo=tentativa $((anteriores + 1)) de $MAX_TENTATIVAS" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Registrar recusa
+        if: steps.decide.outputs.prosseguir != 'true'
+        run: |
+          {
+            echo "### Self-healing não executou"
+            echo
+            echo "${{ steps.decide.outputs.motivo }}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  triagem:
+    name: Triagem
+    needs: porteiro
+    if: needs.porteiro.outputs.prosseguir == 'true'
+    runs-on: ubuntu-latest
+    # No nível do job porque o `if` de um step não vê o `env` dele mesmo,
+    # e o contexto `secrets` não está disponível em `if` de step.
+    env:
+      SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_URL }}
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_OIDC_ROLE_ARN_VITAO }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Acesso ao cluster
+        run: aws eks update-kubeconfig --name "$CLUSTER" --region "$AWS_REGION"
+
+      - name: Descobrir o ALB
+        id: alb
+        run: |
+          set -euo pipefail
+          host=$(kubectl -n "$NAMESPACE" get ingress evaluation-service \
+            -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+          [ -n "$host" ] || { echo "ALB sem hostname"; exit 1; }
+          echo "host=$host" >> "$GITHUB_OUTPUT"
+
+      - name: 1 · A falha reproduz?
+        id: reproduz
+        env:
+          ALB: ${{ steps.alb.outputs.host }}
+        run: |
+          set -euo pipefail
+          codigo=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 \
+            "http://$ALB/evaluate?user_id=sonda-self-healing&flag_name=$FLAG_REAL" || echo 000)
+          echo "GET /evaluate -> $codigo"
+          echo "codigo=$codigo" >> "$GITHUB_OUTPUT"
+          if [ "$codigo" = "200" ]; then
+            echo "reproduz=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "reproduz=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: 2 · Sonda HTTP — credencial, auth-service e banco do flag-service
+        id: http
+        if: steps.reproduz.outputs.reproduz == 'true'
+        env:
+          ALB: ${{ steps.alb.outputs.host }}
+        run: |
+          set -euo pipefail
+          key=$(aws secretsmanager get-secret-value --secret-id "$SEGREDO" \
+            --version-stage AWSCURRENT --query SecretString --output text \
+            | jq -r .SERVICE_API_KEY)
+          echo "::add-mask::$key"
+
+          codigo=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 \
+            "http://$ALB/flags/$FLAG_SONDA" -H "Authorization: Bearer $key" || echo 000)
+          echo "GET /flags/$FLAG_SONDA -> $codigo"
+
+          # O require_auth do flag-service devolve código diferente por causa.
+          case "$codigo" in
+            401|403) causa=credencial ;;
+            404)     causa=nenhuma ;;
+            500)     causa=banco-do-flag-service ;;
+            503)     causa=auth-service-fora ;;
+            504)     causa=auth-service-lento ;;
+            *)       causa=inesperado ;;
+          esac
+          echo "codigo=$codigo" >> "$GITHUB_OUTPUT"
+          echo "causa=$causa"   >> "$GITHUB_OUTPUT"
+
+      - name: 3 · Sonda de pods
+        id: pods
+        if: steps.reproduz.outputs.reproduz == 'true'
+        run: |
+          set -euo pipefail
+          kubectl -n "$NAMESPACE" get pods -o wide > pods.txt
+          cat pods.txt
+          ruins=$(kubectl -n "$NAMESPACE" get pods \
+            -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.status.phase}{" "}{range .status.containerStatuses[*]}{.ready}{" "}{.state.waiting.reason}{.lastState.terminated.reason}{" "}{end}{"\n"}{end}' \
+            | grep -iE "CrashLoopBackOff|OOMKilled|ImagePull|false" | tr '\n' ';' || true)
+          echo "achado=${ruins:-nenhum}" >> "$GITHUB_OUTPUT"
+
+      - name: 4 · Sonda de nós
+        id: nos
+        if: steps.reproduz.outputs.reproduz == 'true'
+        run: |
+          set -euo pipefail
+          kubectl get nodes -o wide
+          naoprontos=$(kubectl get nodes \
+            -o jsonpath='{range .items[*]}{.metadata.name}{" "}{range .status.conditions[?(@.type=="Ready")]}{.status}{end}{"\n"}{end}' \
+            | grep -v " True$" | tr '\n' ';' || true)
+          # Sem field-selector: duas condições na mesma chave viram AND e nunca casam.
+          eventos=$(kubectl get events -A --sort-by=.lastTimestamp \
+            -o custom-columns='R:.reason,O:.involvedObject.name' --no-headers 2>/dev/null \
+            | grep -iE "NodeNotReady|NodeTerminat|Rebalance|Spot|Preempt" | tail -5 | tr '\n' ';' || true)
+          echo "nao_prontos=${naoprontos:-nenhum}" >> "$GITHUB_OUTPUT"
+          echo "eventos=${eventos:-nenhum}" >> "$GITHUB_OUTPUT"
+
+      - name: 5 · Sonda de RDS
+        id: rds
+        if: steps.reproduz.outputs.reproduz == 'true'
+        run: |
+          set -euo pipefail
+          aws rds describe-db-instances \
+            --query 'DBInstances[].[DBInstanceIdentifier,DBInstanceStatus]' --output table
+          fora=$(aws rds describe-db-instances \
+            --query "DBInstances[?DBInstanceStatus!='available'].DBInstanceIdentifier" \
+            --output text)
+          echo "fora=${fora:-nenhuma}" >> "$GITHUB_OUTPUT"
+
+      - name: 6 · Remediação — reverter a rotação
+        id: remediacao
+        if: >-
+          steps.http.outputs.causa == 'credencial' &&
+          (github.event_name == 'repository_dispatch' || inputs.remediar)
+        run: |
+          set -euo pipefail
+
+          atual=$(aws secretsmanager list-secret-version-ids --secret-id "$SEGREDO" \
+            --query "Versions[?contains(VersionStages,'AWSCURRENT')].VersionId" --output text)
+          anterior=$(aws secretsmanager list-secret-version-ids --secret-id "$SEGREDO" \
+            --query "Versions[?contains(VersionStages,'AWSPREVIOUS')].VersionId" --output text)
+
+          if [ -z "$anterior" ]; then
+            echo "Sem AWSPREVIOUS: não há para onde voltar." >&2
+            echo "feito=false" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
+          aws secretsmanager update-secret-version-stage --secret-id "$SEGREDO" \
+            --version-stage AWSCURRENT \
+            --move-to-version-id "$anterior" --remove-from-version-id "$atual"
+
+          # O ESO só acompanha no próximo refreshInterval, que é de 1h.
+          for es in evaluation-service-app auth-service; do
+            kubectl annotate externalsecret "$es" -n "$NAMESPACE" \
+              force-sync="$(date +%s)" --overwrite
+          done
+          kubectl wait --for=condition=Ready externalsecret/evaluation-service-app \
+            -n "$NAMESPACE" --timeout=90s
+
+          # delete pod, não rollout restart: o selfHeal do Argo CD trata
+          # restart como drift. A chave é lida só no boot do contêiner.
+          kubectl delete pod -n "$NAMESPACE" -l app=evaluation-service
+          kubectl rollout status deploy/evaluation-service -n "$NAMESPACE" --timeout=180s
+
+          {
+            echo "feito=true"
+            echo "de=$atual"
+            echo "para=$anterior"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: 7 · Verificação
+        id: verificacao
+        if: steps.remediacao.outputs.feito == 'true'
+        env:
+          ALB: ${{ steps.alb.outputs.host }}
+        run: |
+          set -euo pipefail
+          key=$(aws secretsmanager get-secret-value --secret-id "$SEGREDO" \
+            --version-stage AWSCURRENT --query SecretString --output text \
+            | jq -r .SERVICE_API_KEY)
+          echo "::add-mask::$key"
+
+          sonda=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 \
+            "http://$ALB/flags/$FLAG_SONDA" -H "Authorization: Bearer $key" || echo 000)
+          fluxo=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 \
+            "http://$ALB/evaluate?user_id=sonda-self-healing&flag_name=$FLAG_REAL" || echo 000)
+
+          echo "sonda=$sonda fluxo=$fluxo"
+          echo "sonda=$sonda" >> "$GITHUB_OUTPUT"
+          echo "fluxo=$fluxo" >> "$GITHUB_OUTPUT"
+
+          if [ "$sonda" = "404" ] && [ "$fluxo" = "200" ]; then
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
+      - name: Relatório
+        if: always()
+        env:
+          MONITOR: ${{ github.event.client_payload.monitor || 'disparo manual' }}
+          SERVICO: ${{ github.event.client_payload.servico || inputs.servico }}
+          CICLO: ${{ github.event.client_payload.ciclo || 'manual' }}
+          LINK: ${{ github.event.client_payload.link }}
+          TENTATIVA: ${{ needs.porteiro.outputs.motivo }}
+        run: |
+          {
+            echo "### Triagem — ${SERVICO:-?}"
+            echo
+            echo "**Monitor:** $MONITOR  "
+            echo "**Ciclo:** \`$CICLO\` · $TENTATIVA  "
+            [ -n "$LINK" ] && echo "**Alerta:** $LINK  "
+            echo
+            echo "| Sonda | Resultado | Ação |"
+            echo "|---|---|---|"
+            echo "| Reproduz (\`GET /evaluate\`) | ${{ steps.reproduz.outputs.codigo }} | ${{ steps.reproduz.outputs.reproduz == 'true' && 'segue' || 'não reproduz — encerrado' }} |"
+            if [ "${{ steps.reproduz.outputs.reproduz }}" = "true" ]; then
+              echo "| Credencial / auth / banco (\`GET /flags\`) | ${{ steps.http.outputs.codigo }} → \`${{ steps.http.outputs.causa }}\` | ${{ steps.http.outputs.causa == 'credencial' && 'remediação' || 'descartada' }} |"
+              echo "| Pods | ${{ steps.pods.outputs.achado }} | reporta |"
+              echo "| Nós | ${{ steps.nos.outputs.nao_prontos }} | reporta |"
+              echo "| RDS | ${{ steps.rds.outputs.fora }} | reporta |"
+            fi
+            echo
+            if [ "${{ steps.remediacao.outputs.feito }}" = "true" ]; then
+              echo "**Remediação:** version stage \`${{ steps.remediacao.outputs.de }}\` → \`${{ steps.remediacao.outputs.para }}\`, ESO sincronizado, pods do \`evaluation-service\` reciclados"
+              echo
+              echo "**Verificação:** sonda ${{ steps.verificacao.outputs.sonda }} · fluxo ${{ steps.verificacao.outputs.fluxo }} — ${{ steps.verificacao.outputs.ok == 'true' && 'resolvido' || 'NÃO resolvido, escalado' }}"
+            elif [ "${{ steps.http.outputs.causa }}" = "credencial" ]; then
+              echo "**Remediação não executada:** confirmada pela sonda, mas o disparo manual veio sem \`remediar\`."
+            else
+              echo "**Nenhuma remediação disponível para a causa encontrada.** Diagnóstico acima; ação humana necessária."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Avisar no Slack
+        if: always() && env.SLACK_WEBHOOK != ''
+        env:
+          SERVICO: ${{ github.event.client_payload.servico || inputs.servico }}
+          MONITOR: ${{ github.event.client_payload.monitor || 'disparo manual' }}
+        run: |
+          set -euo pipefail
+          run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+
+          if [ "${{ steps.verificacao.outputs.ok }}" = "true" ]; then
+            texto=":wrench: *$SERVICO — remediado automaticamente*\nCausa: credencial inválida no AWSCURRENT\nAção: version stage revertido, ESO sincronizado, pods reciclados\nVerificado: fluxo 200"
+          elif [ "${{ steps.reproduz.outputs.reproduz }}" = "false" ]; then
+            texto=":mag: *$SERVICO — alerta não reproduz*\nO monitor disparou, mas \`/evaluate\` responde 200. Nada remediado."
+          elif [ "${{ steps.remediacao.outputs.feito }}" = "true" ]; then
+            texto=":warning: *$SERVICO — remediação executada, sem confirmação*\nSonda ${{ steps.verificacao.outputs.sonda }}, fluxo ${{ steps.verificacao.outputs.fluxo }}. Precisa de olho humano."
+          else
+            texto=":question: *$SERVICO — diagnosticado, sem remediação*\nCausa apontada: \`${{ steps.http.outputs.causa }}\`. Nenhuma remediação automática cobre isso."
+          fi
+
+          curl -sS -X POST "$SLACK_WEBHOOK" -H 'Content-type: application/json' \
+            --data "$(jq -n --arg t "$texto" --arg m "$MONITOR" --arg u "$run_url" \
+              '{text: ($t + "\nMonitor: " + $m + "\n<" + $u + "|ver triagem>")}')"
