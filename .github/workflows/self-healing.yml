@@ -177,9 +177,11 @@ jobs:
         if: steps.reproduz.outputs.reproduz == 'true'
         run: |
           set -euo pipefail
-          kubectl -n "$NAMESPACE" get pods -o wide > pods.txt
-          cat pods.txt
-          ruins=$(kubectl -n "$NAMESPACE" get pods \
+          kubectl -n "$NAMESPACE" get pods -o wide
+
+          # Succeeded fora: Job de migração que terminou tem container
+          # não-pronto por definição, e viraria achado em todo incidente.
+          ruins=$(kubectl -n "$NAMESPACE" get pods --field-selector status.phase!=Succeeded \
             -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.status.phase}{" "}{range .status.containerStatuses[*]}{.ready}{" "}{.state.waiting.reason}{.lastState.terminated.reason}{" "}{end}{"\n"}{end}' \
             | grep -iE "CrashLoopBackOff|OOMKilled|ImagePull|false" | tr '\n' ';' || true)
           echo "achado=${ruins:-nenhum}" >> "$GITHUB_OUTPUT"
@@ -304,7 +306,7 @@ jobs:
             if [ "${{ steps.reproduz.outputs.reproduz }}" = "true" ]; then
               echo "| Credencial / auth / banco (\`GET /flags\`) | ${{ steps.http.outputs.codigo }} → \`${{ steps.http.outputs.causa }}\` | ${{ steps.http.outputs.causa == 'credencial' && 'remediação' || 'descartada' }} |"
               echo "| Pods | ${{ steps.pods.outputs.achado }} | reporta |"
-              echo "| Nós | ${{ steps.nos.outputs.nao_prontos }} | reporta |"
+              echo "| Nós | ${{ steps.nos.outputs.nao_prontos }} · eventos: ${{ steps.nos.outputs.eventos }} | reporta |"
               echo "| RDS | ${{ steps.rds.outputs.fora }} | reporta |"
             fi
             echo
