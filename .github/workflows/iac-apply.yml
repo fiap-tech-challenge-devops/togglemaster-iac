@@ -73,10 +73,29 @@ jobs:
       aws-oidc-role-arn: ${{ secrets.AWS_OIDC_ROLE_ARN_VITAO }}
       tf-vars: ${{ secrets.TF_VARS_ADDONS }}
 
-  # Sem needs: não depende de AWS. Está aqui para "subir tudo" ser um disparo
-  # só; datadog/** fica fora dos paths acima, senão um monitor reconstruiria
-  # o ambiente. Ver ADR 0027.
+  # Sem needs: não depende de AWS. Vem antes do datadog porque é aqui que a
+  # integração nasce — o handle @pagerduty-<serviço> na mensagem do monitor só
+  # roteia depois que o serviço existe. Ver ADR 0033.
+  pagerduty:
+    concurrency:
+      group: pagerduty-${{ github.ref }}
+      cancel-in-progress: false
+    uses: fiap-tech-challenge-devops/reusable-workflows/.github/workflows/terraform-apply.yml@v2.4.0
+    with:
+      stage: pagerduty
+      state-bucket-prefix: togglemaster-iac-tfstate
+      aws-region: us-east-1
+      terraform-version: "1.15.8"
+    secrets:
+      aws-oidc-role-arn: ${{ secrets.AWS_OIDC_ROLE_ARN_VITAO }}
+      tf-vars: ${{ secrets.TF_VARS_INFRA }}
+
+  # needs: pagerduty, e só ele. Continua sem depender de AWS — o que a 0027
+  # protegeu era o plan, que segue independente. Aqui a ordem existe porque a
+  # mensagem do monitor cita @pagerduty-<serviço>, e um handle para serviço
+  # inexistente ou é recusado ou não roteia.
   datadog:
+    needs: pagerduty
     # Mesmo grupo do datadog-apply.yml: grupo de concorrência é escopado pelo
     # repositório, então os dois escritores do datadog.tfstate serializam. Um
     # commit que toque datadog/ e este arquivo dispara os dois ao mesmo tempo,

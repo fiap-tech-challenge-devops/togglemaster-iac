@@ -41,7 +41,10 @@ bootstrap/    # state remoto, repositórios ECR e a role de CI
 infra/        # rede, cluster, bancos, mensageria, identidades
 addons/       # componentes que rodam dentro do cluster, incluindo o Argo CD
 datadog/      # monitores e integrações do Datadog, state independente
+pagerduty/    # serviço de plantão e as duas pontas da integração com o Datadog
 ```
+
+Os dois últimos configuram SaaS, não AWS. A stack de observabilidade — Collector, Prometheus, Grafana — vive no `togglemaster-gitops`.
 
 ### O que aqui não é Terraform
 

@@ -44,6 +44,14 @@ variable "notification_targets" {
   default     = ""
 }
 
+# O handle é derivado de service_namespace e environment, os mesmos do stage
+# pagerduty — não há key atravessando fronteira, só o nome. Ver ADR 0033.
+variable "pagerduty_habilitado" {
+  description = "Acrescenta o handle do PagerDuty à mensagem dos monitores."
+  type        = bool
+  default     = false
+}
+
 variable "github_org" {
   description = "Organização que hospeda o workflow de self-healing."
   type        = string

@@ -39,7 +39,7 @@ jobs:
       # do apply do infra, e num ambiente ainda não provisionado o plan dele
       # falha — isso não deve bloquear o PR.
       stages: >-
-        [{"stage":"infra","required":true},{"stage":"addons","required":false},{"stage":"datadog","required":false}]
+        [{"stage":"infra","required":true},{"stage":"addons","required":false},{"stage":"datadog","required":false},{"stage":"pagerduty","required":false}]
       summary-stage: infra
       state-bucket-prefix: togglemaster-iac-tfstate
       aws-region: us-east-1
