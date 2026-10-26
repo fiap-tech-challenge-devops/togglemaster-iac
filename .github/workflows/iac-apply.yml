@@ -90,12 +90,15 @@ jobs:
       aws-oidc-role-arn: ${{ secrets.AWS_OIDC_ROLE_ARN_VITAO }}
       tf-vars: ${{ secrets.TF_VARS_INFRA }}
 
-  # needs: pagerduty, e só ele. Continua sem depender de AWS — o que a 0027
-  # protegeu era o plan, que segue independente. Aqui a ordem existe porque a
-  # mensagem do monitor cita @pagerduty-<serviço>, e um handle para serviço
-  # inexistente ou é recusado ou não roteia.
+  # needs: pagerduty dá a ordem; o if tira o bloqueio. A mensagem do monitor
+  # cita @pagerduty-<serviço>, então vir depois é melhor — mas uma falha num
+  # stage de SaaS que não custa nada não pode impedir os monitores de subirem.
+  # Sem handle que roteie, o alerta no Slack e o self-healing seguem de pé.
+  #
+  # Mesmo padrão do iac-destroy, e pela mesma razão.
   datadog:
     needs: pagerduty
+    if: ${{ !cancelled() }}
     # Mesmo grupo do datadog-apply.yml: grupo de concorrência é escopado pelo
     # repositório, então os dois escritores do datadog.tfstate serializam. Um
     # commit que toque datadog/ e este arquivo dispara os dois ao mesmo tempo,
