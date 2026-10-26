@@ -49,12 +49,12 @@ resource "pagerduty_service_integration" "datadog" {
 # A outra metade da integração. Fica neste stage, e não no datadog/, porque
 # consome a integration_key acima — assim a chave não atravessa fronteira de
 # stage e o plan do datadog continua sem dependência de AWS. Ver ADR 0033.
-# Sem api_token: ele é opcional e serve para o Datadog ler schedules do
-# PagerDuty, que não usamos. Disparar e resolver incidente vai pela Events API
-# com a routing key do service object. Omitir evita guardar o token do
-# PagerDuty dentro do Datadog também. Se o apply reclamar, acrescentar.
+# O api_token é "opcional" no schema, mas não na prática: sem ele a API do
+# Datadog recusa com "The integration is not installed". Ele não serve só para
+# ler schedules — é o que instala a integração na conta. Medido em 26/10.
 resource "datadog_integration_pagerduty" "conta" {
   subdomain = var.pagerduty_subdomain
+  api_token = var.pagerduty_token
 }
 
 resource "datadog_integration_pagerduty_service_object" "togglemaster" {
