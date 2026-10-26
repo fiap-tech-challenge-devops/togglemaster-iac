@@ -61,6 +61,8 @@ O porquê de não haver repositório separado para isso está em [0031](https://
 
 ## Pré-requisitos manuais
 
+**O que precisa estar dentro de cada secret está em [`docs/variaveis-e-segredos.md`](docs/variaveis-e-segredos.md)** — variável por variável, quais são obrigatórias e qual stage reprova sem elas.
+
 Duas coisas precisam existir **antes** de qualquer esteira rodar, e não são criadas por este repositório:
 
 | Recurso | Por quê é manual |
