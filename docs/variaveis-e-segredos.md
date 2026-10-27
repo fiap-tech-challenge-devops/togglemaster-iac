@@ -26,11 +26,13 @@ A contrapartida: uma variável **faltando** reprova o plano daquele stage com `E
 | `pagerduty_subdomain` | **sim** | a parte antes de `.pagerduty.com` |
 | `pagerduty_user_email` | **sim** | o plantonista; precisa **já existir** na conta PagerDuty |
 | `pagerduty_habilitado` | não | `true` acrescenta o handle aos oito monitores. Padrão `false` |
-| `slack_workspace` | não | nome da conta Slack **como o Datadog a registrou** no OAuth. Vazio desliga o canal e o handle |
-| `slack_channel` | não | padrão `#alertas-prod` |
+| `slack_workspace` | não | nome da conta Slack **como o Datadog a registrou** no OAuth. Vazio tira o handle dos monitores |
+| `slack_channel` | não | padrão `#alertas-prod`. Precisa **já estar registrado** no painel do Datadog |
 | `datadog_site` | não | padrão `datadoghq.com` |
 
-O `slack_workspace` vazio é o estado desligado: sem ele, nem o recurso do canal nem o handle `@slack-` entram. Não repita o handle em `notification_targets`, ou o monitor notifica o canal duas vezes.
+O `slack_workspace` vazio é o estado desligado: sem ele o handle `@slack-` não entra na mensagem. Não repita o handle em `notification_targets`, ou o monitor notifica o canal duas vezes.
+
+As duas descrevem um canal que **o Terraform não cria** — ele só monta o handle. Registrar o canal é passo de painel, e as duas variáveis precisam bater com o que está lá. Errar o nome não reprova o apply: o Datadog aceita handle inexistente e o alerta deixa de chegar em silêncio.
 
 Obrigatória significa: **sem ela o plano daquele stage reprova**. As três do PagerDuty só afetam o stage `pagerduty`; as do Datadog afetam três stages.
 
@@ -69,6 +71,7 @@ Coisas que precisam existir **antes** e que nenhuma esteira cria:
 | Conta Datadog, com API key e Application key | painel do Datadog |
 | Conta PagerDuty, com o usuário do plantão | painel do PagerDuty |
 | App do Slack com incoming webhook | `api.slack.com/apps` |
+| App do Datadog autorizado no workspace, e o canal registrado | painel do Datadog, `Integrations → Slack` |
 | PAT com `Contents: read and write` | GitHub, fine-grained |
 
 Os quatro últimos são OAuth ou cadastro, e não se automatizam. É a mesma lista de [0021](https://github.com/fiap-tech-challenge-devops/.github/blob/main/docs/decisoes/0021-api-key-do-datadog-por-tf-vars.md), [0028](https://github.com/fiap-tech-challenge-devops/.github/blob/main/docs/decisoes/0028-slack-para-chatops.md) e [0030](https://github.com/fiap-tech-challenge-devops/.github/blob/main/docs/decisoes/0030-self-healing-em-github-action.md), reunida num lugar só.

@@ -44,16 +44,20 @@ variable "notification_targets" {
   default     = ""
 }
 
-# Vazio desliga o canal e o handle. O nome é o que o Datadog registrou para o
-# workspace ao conectar por OAuth, não o nome que aparece no Slack.
+# O canal é registrado à mão no painel do Datadog; aqui só se monta o handle
+# que vai na mensagem do monitor. O handle precisa ser código porque a mensagem
+# é gerenciada pelo Terraform — escrito à mão na UI, o próximo apply apaga.
+#
+# O nome é o que o Datadog registrou para o workspace ao conectar por OAuth,
+# não o que aparece no Slack. Vazio tira o handle dos monitores.
 variable "slack_workspace" {
-  description = "Nome da conta Slack no Datadog. Vazio desliga a integração."
+  description = "Nome da conta Slack no Datadog. Vazio tira o handle dos monitores."
   type        = string
   default     = ""
 }
 
 variable "slack_channel" {
-  description = "Canal que recebe os alertas, com #."
+  description = "Canal que recebe os alertas, com #. Precisa já estar registrado no painel do Datadog."
   type        = string
   default     = "#alertas-prod"
 }
