@@ -1,6 +1,10 @@
 locals {
   notify = var.notification_targets == "" ? "" : "\n\n${var.notification_targets}"
 
+  # Nos oito monitores: a escolha foi paginar tudo, aceitando que o incidente
+  # do evaluation abra e resolva sozinho quando o self-healing agir.
+  paginar = var.pagerduty_habilitado ? "\n\n@pagerduty-${var.service_namespace}-${var.environment}" : ""
+
   # Latência por serviço, porque os papéis são diferentes: o evaluation faz
   # fan-out para flag, targeting, auth e Redis; o auth é uma query só.
   #
@@ -49,7 +53,7 @@ resource "datadog_monitor" "taxa_de_erro" {
 
     Ele ${each.value.papel}, e ${each.value.impacto}.
 
-    Traces: https://app.${var.datadog_site}/apm/services/${each.key}?env=${var.environment}${local.notify}${lookup(local.remediacao, each.key, "")}
+    Traces: https://app.${var.datadog_site}/apm/services/${each.key}?env=${var.environment}${local.notify}${local.paginar}${lookup(local.remediacao, each.key, "")}
   EOT
 
   monitor_thresholds {
@@ -87,7 +91,7 @@ resource "datadog_monitor" "latencia" {
 
     Latência alta costuma aparecer **antes** da taxa de erro: o serviço ainda responde, só que tarde. Se o chamador tiver timeout, o erro aparece nele, não aqui.
 
-    Traces: https://app.${var.datadog_site}/apm/services/${each.key}?env=${var.environment}${local.notify}
+    Traces: https://app.${var.datadog_site}/apm/services/${each.key}?env=${var.environment}${local.notify}${local.paginar}
   EOT
 
   monitor_thresholds {

@@ -72,11 +72,27 @@ jobs:
       aws-oidc-role-arn: ${{ secrets.AWS_OIDC_ROLE_ARN_VITAO }}
       tf-vars: ${{ secrets.TF_VARS_INFRA }}
 
+  # Depois do datadog: enquanto os monitores existirem, o handle deles aponta
+  # para este serviço. Mesma tolerância — nenhum dos dois pode segurar a
+  # destruição do que custa dinheiro.
+  pagerduty:
+    needs: [guard, datadog]
+    if: ${{ !cancelled() && needs.guard.result == 'success' }}
+    uses: fiap-tech-challenge-devops/reusable-workflows/.github/workflows/terraform-destroy.yml@v2.4.0
+    with:
+      stage: pagerduty
+      state-bucket-prefix: togglemaster-iac-tfstate
+      aws-region: us-east-1
+      terraform-version: "1.15.8"
+    secrets:
+      aws-oidc-role-arn: ${{ secrets.AWS_OIDC_ROLE_ARN_VITAO }}
+      tf-vars: ${{ secrets.TF_VARS_INFRA }}
+
   # eks-cleanup só no primeiro da cadeia da AWS: ALBs e nós do Karpenter não
   # estão no tfstate e, se sobreviverem, seguram a VPC.
   addons:
-    needs: [guard, datadog]
-    # Roda mesmo se o datadog falhar, mas nunca se o guard reprovar.
+    needs: [guard, datadog, pagerduty]
+    # Roda mesmo se datadog ou pagerduty falharem, mas nunca se o guard reprovar.
     if: ${{ !cancelled() && needs.guard.result == 'success' }}
     uses: fiap-tech-challenge-devops/reusable-workflows/.github/workflows/terraform-destroy.yml@v2.4.0
     with:

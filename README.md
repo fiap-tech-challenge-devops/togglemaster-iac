@@ -41,7 +41,10 @@ bootstrap/    # state remoto, repositórios ECR e a role de CI
 infra/        # rede, cluster, bancos, mensageria, identidades
 addons/       # componentes que rodam dentro do cluster, incluindo o Argo CD
 datadog/      # monitores e integrações do Datadog, state independente
+pagerduty/    # serviço de plantão e as duas pontas da integração com o Datadog
 ```
+
+Os dois últimos configuram SaaS, não AWS. A stack de observabilidade — Collector, Prometheus, Grafana — vive no `togglemaster-gitops`.
 
 ### O que aqui não é Terraform
 
@@ -57,6 +60,8 @@ scripts/demo/                      # gerador de tráfego para a demonstração
 O porquê de não haver repositório separado para isso está em [0031](https://github.com/fiap-tech-challenge-devops/.github/blob/main/docs/decisoes/0031-self-healing-mora-no-iac.md), junto do gatilho que faria a extração valer a pena.
 
 ## Pré-requisitos manuais
+
+**O que precisa estar dentro de cada secret está em [`docs/variaveis-e-segredos.md`](docs/variaveis-e-segredos.md)** — variável por variável, quais são obrigatórias e qual stage reprova sem elas.
 
 Duas coisas precisam existir **antes** de qualquer esteira rodar, e não são criadas por este repositório:
 
