@@ -44,6 +44,20 @@ variable "notification_targets" {
   default     = ""
 }
 
+# Vazio desliga o canal e o handle. O nome é o que o Datadog registrou para o
+# workspace ao conectar por OAuth, não o nome que aparece no Slack.
+variable "slack_workspace" {
+  description = "Nome da conta Slack no Datadog. Vazio desliga a integração."
+  type        = string
+  default     = ""
+}
+
+variable "slack_channel" {
+  description = "Canal que recebe os alertas, com #."
+  type        = string
+  default     = "#alertas-prod"
+}
+
 # O handle é derivado de service_namespace e environment, os mesmos do stage
 # pagerduty — não há key atravessando fronteira, só o nome. Ver ADR 0033.
 variable "pagerduty_habilitado" {
