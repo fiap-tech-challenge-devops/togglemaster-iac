@@ -5,9 +5,11 @@ locals {
   # do evaluation abra e resolva sozinho quando o self-healing agir.
   paginar = var.pagerduty_habilitado ? "\n\n@pagerduty-${var.service_namespace}-${var.environment}" : ""
 
-  # Derivado das mesmas variáveis do recurso do canal, para o handle e o canal
-  # não divergirem. Formato qualificado pela conta, que é o documentado.
-  slack = var.slack_workspace == "" ? "" : "\n\n@slack-${var.slack_workspace}-${trimprefix(var.slack_channel, "#")}"
+  # Derivado do recurso, não das variáveis: isso cria a aresta de dependência
+  # que faz o canal ser criado antes dos monitores. Sem ela, um apply sem o
+  # OAuth feito atualiza os oito monitores com um handle morto — o Datadog
+  # aceita handle inexistente sem reclamar. Medido em 27/10.
+  slack = length(datadog_integration_slack_channel.alertas) == 0 ? "" : "\n\n@slack-${datadog_integration_slack_channel.alertas[0].account_name}-${trimprefix(datadog_integration_slack_channel.alertas[0].channel_name, "#")}"
 
   # Latência por serviço, porque os papéis são diferentes: o evaluation faz
   # fan-out para flag, targeting, auth e Redis; o auth é uma query só.
