@@ -26,7 +26,11 @@ A contrapartida: uma variável **faltando** reprova o plano daquele stage com `E
 | `pagerduty_subdomain` | **sim** | a parte antes de `.pagerduty.com` |
 | `pagerduty_user_email` | **sim** | o plantonista; precisa **já existir** na conta PagerDuty |
 | `pagerduty_habilitado` | não | `true` acrescenta o handle aos oito monitores. Padrão `false` |
+| `slack_workspace` | não | nome da conta Slack **como o Datadog a registrou** no OAuth. Vazio desliga o canal e o handle |
+| `slack_channel` | não | padrão `#alertas-prod` |
 | `datadog_site` | não | padrão `datadoghq.com` |
+
+O `slack_workspace` vazio é o estado desligado: sem ele, nem o recurso do canal nem o handle `@slack-` entram. Não repita o handle em `notification_targets`, ou o monitor notifica o canal duas vezes.
 
 Obrigatória significa: **sem ela o plano daquele stage reprova**. As três do PagerDuty só afetam o stage `pagerduty`; as do Datadog afetam três stages.
 

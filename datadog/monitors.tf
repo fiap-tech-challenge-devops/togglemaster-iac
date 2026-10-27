@@ -5,6 +5,10 @@ locals {
   # do evaluation abra e resolva sozinho quando o self-healing agir.
   paginar = var.pagerduty_habilitado ? "\n\n@pagerduty-${var.service_namespace}-${var.environment}" : ""
 
+  # Derivado das mesmas variáveis do recurso do canal, para o handle e o canal
+  # não divergirem. Formato qualificado pela conta, que é o documentado.
+  slack = var.slack_workspace == "" ? "" : "\n\n@slack-${var.slack_workspace}-${trimprefix(var.slack_channel, "#")}"
+
   # Latência por serviço, porque os papéis são diferentes: o evaluation faz
   # fan-out para flag, targeting, auth e Redis; o auth é uma query só.
   #
@@ -53,7 +57,7 @@ resource "datadog_monitor" "taxa_de_erro" {
 
     Ele ${each.value.papel}, e ${each.value.impacto}.
 
-    Traces: https://app.${var.datadog_site}/apm/services/${each.key}?env=${var.environment}${local.notify}${local.paginar}${lookup(local.remediacao, each.key, "")}
+    Traces: https://app.${var.datadog_site}/apm/services/${each.key}?env=${var.environment}${local.notify}${local.slack}${local.paginar}${lookup(local.remediacao, each.key, "")}
   EOT
 
   monitor_thresholds {
@@ -91,7 +95,7 @@ resource "datadog_monitor" "latencia" {
 
     Latência alta costuma aparecer **antes** da taxa de erro: o serviço ainda responde, só que tarde. Se o chamador tiver timeout, o erro aparece nele, não aqui.
 
-    Traces: https://app.${var.datadog_site}/apm/services/${each.key}?env=${var.environment}${local.notify}${local.paginar}
+    Traces: https://app.${var.datadog_site}/apm/services/${each.key}?env=${var.environment}${local.notify}${local.slack}${local.paginar}
   EOT
 
   monitor_thresholds {
