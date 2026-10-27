@@ -5,8 +5,9 @@ locals {
   # do evaluation abra e resolva sozinho quando o self-healing agir.
   paginar = var.pagerduty_habilitado ? "\n\n@pagerduty-${var.service_namespace}-${var.environment}" : ""
 
-  # Derivado das mesmas variáveis do recurso do canal, para o handle e o canal
-  # não divergirem. Formato qualificado pela conta, que é o documentado.
+  # O canal é registrado à mão; o handle é código. Formato qualificado pela
+  # conta, que é o documentado. O Datadog aceita handle inexistente sem
+  # reclamar — se o nome da conta não bater, o alerta some em silêncio.
   slack = var.slack_workspace == "" ? "" : "\n\n@slack-${var.slack_workspace}-${trimprefix(var.slack_channel, "#")}"
 
   # Latência por serviço, porque os papéis são diferentes: o evaluation faz
