@@ -7,6 +7,7 @@ Moram aqui porque exercitam o que este repositório provisiona: os monitores do 
 | Script | O quê |
 |---|---|
 | [`gerar-trafego.sh`](gerar-trafego.sh) | Tráfego contínuo em `/evaluate` para alimentar os monitores |
+| [`quebrar-chave.sh`](quebrar-chave.sh) | Invalida a chave de serviço, para o incidente acontecer de verdade |
 
 ## `gerar-trafego.sh`
 
@@ -25,6 +26,46 @@ Metade do tráfego repete três flags "quentes" e metade sorteia. As repetidas t
 Flag inexistente serve igual: como a consulta é paralela, o `evaluation` chama os dois serviços antes de saber se a flag existe.
 
 `Ctrl+C` imprime duração, contagem, taxa de erro e ritmo.
+
+## `quebrar-chave.sh`
+
+```bash
+./quebrar-chave.sh --estado   # só mostra o estado, não toca em nada
+./quebrar-chave.sh            # mostra, pede confirmação, quebra
+./quebrar-chave.sh -y         # sem confirmação
+```
+
+Grava uma chave inválida em `togglemaster/app/evaluation`, força o sync do External Secrets e recicla os pods do `evaluation`. Depois disso o `/evaluate` responde **502** e o monitor dispara sozinho.
+
+**Ele não sabe que o self-healing existe.** Não menciona Datadog, GitHub Actions nem a esteira — termina no estrago. O que vem depois é o sistema reagindo, e é isso que a demonstração precisa mostrar. Essa separação é o que diferencia demonstração de encenação.
+
+### Os três passos, e por que são três
+
+Só gravar o segredo **não quebra nada**:
+
+| Passo | Sem ele |
+|---|---|
+| `put-secret-value` | o Secrets Manager continua com a chave boa |
+| `force-sync` no ExternalSecret | a Secret do Kubernetes só atualiza no próximo refresh — **`refreshInterval: 1h`** |
+| reciclar os pods | o processo segue com a chave antiga: `envFrom` congela a variável no start |
+
+Os pods são reciclados **um por vez**. Derrubar os dois zera os targets saudáveis do ALB e troca o sintoma de "responde erro" (502) por "indisponível" (503) — que é outro incidente.
+
+### A guarda, e por que ela existe
+
+Quebrar move o `AWSCURRENT` de hoje para `AWSPREVIOUS`. Quebrar **duas vezes sem deixar curar** empurra uma chave ruim para o único degrau de rollback:
+
+```
+v1 boa (CURRENT)
+  quebra → v2 ruim (CURRENT), PREVIOUS = v1 boa      self-healing funciona
+  quebra de novo → v3 ruim (CURRENT), PREVIOUS = v2 RUIM   rollback impossível
+```
+
+O script sonda o `AWSCURRENT` antes de agir e **se recusa** se ele já não autentica. É o risco mais provável numa re-gravação, e o motivo mais forte para isto ser script e não comando digitado.
+
+### O valor da chave nunca é impresso
+
+Só os version IDs, abreviados. Chave em tela numa gravação é vazamento permanente.
 
 ## Por que o tráfego precisa existir
 
