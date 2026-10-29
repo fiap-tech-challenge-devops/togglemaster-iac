@@ -22,14 +22,15 @@ O endereço do ALB é **descoberto pelo `kubectl`**, não cravado — ele muda a
 
 ### Ele semeia antes de começar
 
-Nada no GitOps cria flags, então um ambiente recém-construído tem o banco vazio. E **404 não é cacheado**: o evaluator sai antes do `SET` no Redis quando a flag não existe. Sem semear, não há **nenhum** cache HIT, e as "duas distribuições de latência" abaixo viram uma só.
+Nada no GitOps cria flags, então um ambiente recém-construído tem o banco vazio. E o script **só pede flags que ele mesmo criou** — é isso que faz o mapa do APM ficar limpo enquanto o ambiente está são, e vermelho ali passar a significar incidente.
 
-Por isso o script cria as três flags quentes e uma regra de percentual para cada — 100%, 50% e 25% — antes da primeira requisição. É o único jeito de a premissa dele ser verdadeira.
+São **43 flags**, cada uma com regra de percentual: as 3 quentes (100%, 50% e 25%) e 40 `catalogo-NN`. Sem regra, o `targeting` devolveria 404, que é erro no span de cliente.
 
 | Detalhe | Por quê |
 |---|---|
 | A chave sai do **cluster**, não do Secrets Manager | é a que o serviço usa de fato, e evita trazer o `aws` para um script que só usa `kubectl` |
-| `409` conta como sucesso | a flag já existe, que é o estado desejado. Idempotente sem GET antes do POST |
+| Um `GET /flags` antes dos POSTs | o `INSERT` duplicado devolve 409, mas falha no banco **antes** disso, e a instrumentação marca aquele span como erro — sujaria o mapa a cada arranque |
+| Corpo em ASCII puro | com acento o Flask recusa antes do handler e devolve um 400 em HTML do Werkzeug |
 | Falhar **nunca** aborta o tráfego | durante o incidente a chave está quebrada e o POST devolve 401 — e é aí que o monitor mais precisa de tráfego, porque sem requisição não há denominador |
 
 Isto torna o script **não somente-leitura**: ele escreve nos bancos de flags e de targeting. Aceitável aqui porque estes não são ferramentas de operação, mas vale saber.
@@ -38,9 +39,16 @@ Isto torna o script **não somente-leitura**: ele escreve nos bancos de flags e 
 
 **Uma chamada acende os quatro serviços HTTP.** O `evaluation` consulta `flag` e `targeting` em goroutines paralelas, e os dois validam a chave de serviço no `auth`. Soma-se o Redis e o envio ao SQS, que acorda o `analytics` pelo KEDA.
 
-Metade do tráfego repete três flags "quentes" e metade sorteia. As repetidas tendem a bater cache no Redis; as sorteadas forçam MISS e o fan-out completo. São **duas distribuições de latência** em vez de uma, que é o que dá significado ao p95.
+### Os dois lotes, e por que são dois
 
-Flag inexistente serve igual: como a consulta é paralela, o `evaluation` chama os dois serviços antes de saber se a flag existe.
+O que separa os lotes não é o conteúdo — é a **frequência de sorteio**, e ela produz as duas distribuições de latência que dão significado ao p95:
+
+| Lote | Metade do tráfego dividida entre | No ritmo padrão | Efeito |
+|---|---|---|---|
+| quentes | 3 flags | cada uma a cada ~6s | abaixo do TTL de 30s do Redis: **HIT**, resposta sem fan-out |
+| frias | 40 flags | cada uma a cada ~80s | acima do TTL: **MISS**, fan-out para flag, targeting e auth |
+
+As cadências são **calculadas** a partir do intervalo e impressas no arranque, não escritas no texto. Se o intervalo for pequeno o bastante para as frias caírem abaixo do TTL — `./gerar-trafego.sh 0.3` chega perto —, o script avisa em amarelo: ali o fan-out sumiria em silêncio, e isso só se descobriria olhando um mapa vazio durante a gravação.
 
 `Ctrl+C` imprime duração, contagem, taxa de erro e ritmo.
 
