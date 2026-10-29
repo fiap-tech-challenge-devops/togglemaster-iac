@@ -12,12 +12,29 @@ Moram aqui porque exercitam o que este repositório provisiona: os monitores do 
 ## `gerar-trafego.sh`
 
 ```bash
-./gerar-trafego.sh        # 1 requisição por segundo
-./gerar-trafego.sh 0.3    # mais denso
+./gerar-trafego.sh          # 1 requisição por segundo
+./gerar-trafego.sh 0.3      # mais denso
+SEMEAR=false ./gerar-trafego.sh
 ALB=<endereco> ./gerar-trafego.sh
 ```
 
 O endereço do ALB é **descoberto pelo `kubectl`**, não cravado — ele muda a cada reconstrução do ambiente.
+
+### Ele semeia antes de começar
+
+Nada no GitOps cria flags, então um ambiente recém-construído tem o banco vazio. E **404 não é cacheado**: o evaluator sai antes do `SET` no Redis quando a flag não existe. Sem semear, não há **nenhum** cache HIT, e as "duas distribuições de latência" abaixo viram uma só.
+
+Por isso o script cria as três flags quentes e uma regra de percentual para cada — 100%, 50% e 25% — antes da primeira requisição. É o único jeito de a premissa dele ser verdadeira.
+
+| Detalhe | Por quê |
+|---|---|
+| A chave sai do **cluster**, não do Secrets Manager | é a que o serviço usa de fato, e evita trazer o `aws` para um script que só usa `kubectl` |
+| `409` conta como sucesso | a flag já existe, que é o estado desejado. Idempotente sem GET antes do POST |
+| Falhar **nunca** aborta o tráfego | durante o incidente a chave está quebrada e o POST devolve 401 — e é aí que o monitor mais precisa de tráfego, porque sem requisição não há denominador |
+
+Isto torna o script **não somente-leitura**: ele escreve nos bancos de flags e de targeting. Aceitável aqui porque estes não são ferramentas de operação, mas vale saber.
+
+`SEMEAR=false` pula a etapa.
 
 **Uma chamada acende os quatro serviços HTTP.** O `evaluation` consulta `flag` e `targeting` em goroutines paralelas, e os dois validam a chave de serviço no `auth`. Soma-se o Redis e o envio ao SQS, que acorda o `analytics` pelo KEDA.
 

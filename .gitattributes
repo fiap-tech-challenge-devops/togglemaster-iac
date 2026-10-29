@@ -1,4 +1,4 @@
-# Com core.autocrlf=true no Windows, um .sh volta do checkout com CRLF e o
-# Git Bash recusa o shebang: env: 'bash\r': No such file or directory.
-# Num clone novo às vésperas da gravação, isso aparece do nada.
+# Com core.autocrlf=true no Windows, um .sh volta do checkout com CRLF. O Git
+# Bash tolera; Linux, macOS e os runners do CI não — lá o shebang falha com
+# env: 'bash\r': No such file or directory. O shellcheck também recusa (SC1017).
 *.sh text eol=lf

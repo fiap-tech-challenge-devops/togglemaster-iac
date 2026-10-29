@@ -5,7 +5,10 @@
 # Uma chamada acende os quatro serviços: o evaluation recebe, consulta flag e
 # targeting em paralelo, e os dois validam a chave no auth. Mais Redis e SQS.
 #
+# Antes de começar, semeia as flags quentes — sem elas não existe cache HIT.
+#
 #   ./gerar-trafego.sh [intervalo_em_segundos]
+#   SEMEAR=false ./gerar-trafego.sh
 #
 # Ctrl+C encerra e imprime o resumo.
 
@@ -28,7 +31,70 @@ fi
 # Metade do tráfego repete estas chaves, para o Redis responder HIT. A outra
 # metade sorteia, forçando MISS e o fan-out completo para flag e targeting.
 QUENTES=(nova-home checkout-v2 busca-semantica)
+PERCENTUAIS=(100 50 25)
 USUARIOS=(ana bruno carla diego elena)
+
+# O HIT do Redis só existe se a flag existir: uma resposta 404 não é cacheada,
+# o evaluator sai antes do SET. Sem semear, não há HIT nenhum e as "duas
+# distribuições de latência" que dão sentido ao p95 viram uma só.
+#
+# Nunca aborta. Durante o incidente a chave está quebrada e o POST devolve 401
+# — e é justo aí que o monitor mais precisa de tráfego, porque sem requisição
+# não há denominador para a taxa de erro.
+semear() {
+  local chave flag pct i codigo
+
+  # A chave sai do cluster, não do Secrets Manager: é a que o serviço está de
+  # fato usando, e evita trazer o aws CLI para um script que só usa kubectl.
+  chave=$(kubectl -n togglemaster get secret evaluation-service-app-secret \
+    -o jsonpath='{.data.SERVICE_API_KEY}' 2>/dev/null | base64 -d 2>/dev/null)
+
+  if [ -z "$chave" ]; then
+    echo "Não li a chave de serviço no cluster. Seguindo sem semear."
+    echo
+    return
+  fi
+
+  echo "Semeando as flags quentes:"
+  for i in "${!QUENTES[@]}"; do
+    flag="${QUENTES[$i]}"; pct="${PERCENTUAIS[$i]}"
+
+    # 409 é sucesso aqui: a flag já existe, que é o estado desejado.
+    #
+    # Corpo em ASCII puro de propósito: com acento, o Git Bash entrega bytes
+    # que o Flask recusa antes do handler, e a resposta é um 400 em HTML do
+    # Werkzeug, não o 400 em JSON da aplicação. Medido em 29/10.
+    codigo=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 \
+      -X POST "http://$ALB/flags" -H "Authorization: Bearer $chave" \
+      -H 'Content-Type: application/json' \
+      --data "{\"name\":\"$flag\",\"description\":\"Flag da demonstracao\",\"is_enabled\":true}" \
+      2>/dev/null || echo 000)
+
+    case "$codigo" in
+      201) printf "  %-18s flag criada" "$flag" ;;
+      409) printf "  %-18s flag já existia" "$flag" ;;
+      401) printf "  %-18s %s" "$flag" "sem autorização — a chave está quebrada?"; echo; continue ;;
+      *)   printf "  %-18s falhou (HTTP %s)" "$flag" "$codigo"; echo; continue ;;
+    esac
+
+    # Sem regra, o targeting devolve 404 e a aresta dele fica vermelha no mapa
+    # mesmo para as flags quentes. Com regra, o percentual é de fato avaliado.
+    codigo=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 \
+      -X POST "http://$ALB/rules" -H "Authorization: Bearer $chave" \
+      -H 'Content-Type: application/json' \
+      --data "{\"flag_name\":\"$flag\",\"rules\":{\"type\":\"PERCENTAGE\",\"value\":$pct},\"is_enabled\":true}" \
+      2>/dev/null || echo 000)
+
+    case "$codigo" in
+      201) echo ", regra de ${pct}% criada" ;;
+      409) echo ", regra já existia" ;;
+      *)   echo ", regra falhou (HTTP $codigo)" ;;
+    esac
+  done
+  echo
+}
+
+[ "${SEMEAR:-true}" = "true" ] && semear
 
 ok=0; erro=0; inicio=$(date +%s)
 
