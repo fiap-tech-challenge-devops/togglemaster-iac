@@ -40,6 +40,9 @@ env:
   FLAG_SONDA: sonda-self-healing-inexistente
   FLAG_REAL: nova-home
   MAX_TENTATIVAS: 2
+  # Serviço no PagerDuty, derivado de service_namespace e environment do stage
+  # pagerduty — a mesma string dos dois lados, sem indireção. Ver ADR 0033.
+  PD_SERVICO: togglemaster-prod
 
 jobs:
   porteiro:
@@ -113,6 +116,8 @@ jobs:
     # e o contexto `secrets` não está disponível em `if` de step.
     env:
       SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_URL }}
+      PD_TOKEN: ${{ secrets.PAGERDUTY_TOKEN }}
+      PD_FROM: ${{ secrets.PAGERDUTY_FROM_EMAIL }}
     steps:
       - uses: aws-actions/configure-aws-credentials@v6
         with:
@@ -514,3 +519,111 @@ jobs:
           curl -sS -X POST "$SLACK_WEBHOOK" -H 'Content-type: application/json' \
             --data "$(jq -n --arg t "$texto" --arg m "$MONITOR" --arg u "$run_url" \
               '{text: ($t + "\nOrigem: " + $m + "\n<" + $u + "|ver triagem>")}')"
+
+      # A volta para o PagerDuty. O DISPARO continua vindo do Datadog, em
+      # paralelo — ver 0032. O que entra aqui é só o fechamento: o que a
+      # automação fez, e o incidente resolvido quando a verificação passou.
+      #
+      # Melhor esforço: nunca reprova o run. A remediação já aconteceu, e
+      # falhar aqui pintaria de vermelho um incidente que foi resolvido.
+      - name: Fechar o incidente no PagerDuty
+        if: always() && env.PD_TOKEN != '' && env.PD_FROM != ''
+        run: |
+          set -uo pipefail
+          run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+
+          # -f é o que faz isto funcionar: sem ele o curl devolve 0 mesmo num
+          # 403, e todo `if pd ...` daria sucesso reportando o que não houve.
+          #
+          # O header From é exigido pela API em nota e em resolve quando a
+          # chave é General Access — sem ele, 400.
+          pd() {  # $1 = método, $2 = caminho, $3 = corpo (opcional)
+            local -a args=(
+              -sSf -X "$1" "https://api.pagerduty.com$2"
+              -H "Authorization: Token token=$PD_TOKEN"
+              -H 'Accept: application/vnd.pagerduty+json;version=2'
+              -H "From: $PD_FROM"
+            )
+            if [ -n "${3:-}" ]; then
+              args+=(-H 'Content-Type: application/json' --data "$3")
+            fi
+            curl "${args[@]}"
+          }
+
+          # Chamada recusada e serviço inexistente são causas diferentes, e a
+          # mesma mensagem para as duas mandaria procurar no lugar errado.
+          if ! svc=$(pd GET "/services?query=$PD_SERVICO"); then
+            echo "A API do PagerDuty recusou a consulta."
+            echo "Prováveis causas: PAGERDUTY_TOKEN inválido, ou PAGERDUTY_FROM_EMAIL"
+            echo "que não corresponde a um usuário da conta."
+            exit 0
+          fi
+
+          sid=$(echo "$svc" | jq -r '.services[0].id // empty')
+          if [ -z "$sid" ]; then
+            echo "Serviço '$PD_SERVICO' não existe no PagerDuty. Nada a fazer."
+            exit 0
+          fi
+
+          # Uma frase por desfecho. É nota de incidente, não relatório — quem
+          # abre quer saber se ainda precisa agir, e o link leva ao resto.
+          if [ "${{ steps.verificacao.outputs.ok }}" = "true" ]; then
+            resolver=true
+            nota="Self-healing remediou. Causa: credencial inválida no AWSCURRENT. Ação: version stage ${{ steps.remediacao.outputs.de }} para ${{ steps.remediacao.outputs.para }}, ESO sincronizado, pods do evaluation-service reciclados. Verificação: fluxo 200."
+          elif [ "${{ steps.confirmacao.outputs.persiste }}" = "false" ]; then
+            resolver=false
+            nota="Self-healing não agiu: a credencial voltou a autenticar durante a janela de confirmação de ${{ steps.confirmacao.outputs.espera }}s. Ou a falha era passageira, ou alguém corrigiu o segredo. Nada foi alterado."
+          elif [ "${{ steps.reproduz.outputs.reproduz }}" = "false" ]; then
+            resolver=false
+            nota="Self-healing não agiu: o monitor disparou, mas GET /evaluate responde 200."
+          elif [ -n "${{ steps.remediacao.outputs.candidata }}" ] && [ "${{ steps.remediacao.outputs.feito }}" != "true" ]; then
+            resolver=false
+            nota="Self-healing ABORTOU: a chave do AWSPREVIOUS também não autentica (${{ steps.remediacao.outputs.candidata }}). Nenhuma etiqueta foi movida, o degrau de rollback está preservado. Ação humana necessária."
+          else
+            resolver=false
+            nota="Self-healing não resolveu. Causa identificada: ${{ steps.http.outputs.causa }}. Ação humana necessária."
+          fi
+          nota="$nota Triagem: $run_url"
+
+          abertos=$(pd GET "/incidents?service_ids%5B%5D=$sid&statuses%5B%5D=triggered&statuses%5B%5D=acknowledged" \
+            | jq -r '.incidents[].id')
+
+          if [ -z "$abertos" ]; then
+            # Nenhum aberto. Ou o Datadog já resolveu, ou nunca abriu — e essa
+            # distinção é exatamente o item que a 0033 deixou sem resposta,
+            # então aproveita a passagem e mede.
+            desde=$(date -u -d '1 hour ago' +%Y-%m-%dT%H:%M:%SZ)
+            n=$(pd GET "/incidents?service_ids%5B%5D=$sid&statuses%5B%5D=resolved&since=$desde" \
+              | jq -r '.incidents | length')
+            echo "Nenhum incidente aberto em '$PD_SERVICO'."
+            echo "Resolvidos na última hora: ${n:-0}"
+            if [ "${n:-0}" -gt 0 ]; then
+              echo "→ o resolve automático do Datadog funcionou nesta volta."
+            else
+              echo "→ nenhum incidente foi aberto para este alerta."
+            fi
+            exit 0
+          fi
+
+          for id in $abertos; do
+            if pd POST "/incidents/$id/notes" \
+                 "$(jq -n --arg c "$nota" '{note: {content: $c}}')" >/dev/null; then
+              echo "nota acrescentada ao incidente $id"
+            else
+              echo "falhou a nota no incidente $id"
+            fi
+
+            # Resolve só com a verificação verde. Fechar um incidente que a
+            # automação não provou consertado é pior que deixá-lo aberto: some
+            # o sinal de que alguém ainda precisa olhar.
+            if [ "$resolver" = true ]; then
+              if pd PUT "/incidents/$id" \
+                   '{"incident":{"type":"incident_reference","status":"resolved"}}' >/dev/null; then
+                echo "incidente $id resolvido"
+              else
+                echo "falhou o resolve do incidente $id"
+              fi
+            else
+              echo "incidente $id deixado ABERTO — a automação não provou conserto"
+            fi
+          done

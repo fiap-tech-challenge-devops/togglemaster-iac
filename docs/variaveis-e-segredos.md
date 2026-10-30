@@ -10,6 +10,8 @@ O que precisa estar dentro de cada secret do repositório, e por quê. O **mecan
 | `TF_VARS_INFRA` | `nome=valor`, uma por linha | stages `infra`, `datadog` e `pagerduty` |
 | `TF_VARS_ADDONS` | idem | stage `addons` |
 | `SLACK_WEBHOOK_URL` | URL do incoming webhook | workflow de self-healing |
+| `PAGERDUTY_TOKEN` | chave REST da API | workflow de self-healing |
+| `PAGERDUTY_FROM_EMAIL` | e-mail de um usuário da conta | workflow de self-healing |
 
 **Um secret serve três stages** porque o Terraform **ignora em silêncio** um `TF_VAR_<nome>` de variável que o stage não declara. Mandar o conjunto inteiro para todos é seguro, e evita três secrets divergindo.
 
@@ -61,6 +63,19 @@ O comando lê do stdin e **não ecoa o valor**. Ele substitui o secret inteiro, 
 
 Depois de atualizar, rode a esteira do stage afetado. Mudar `datadog_api_key` tem passos extras no cluster — ver [troca de conta Datadog](https://github.com/fiap-tech-challenge-devops/.github/blob/main/docs/observabilidade/README.md#trocar-de-conta-datadog).
 
+## Os três do self-healing
+
+Os três são **opcionais**, e cada passo se desliga sozinho quando o seu falta. Isso é de propósito: o workflow precisa triar e remediar num repositório recém-clonado, sem integração nenhuma configurada.
+
+| Falta | O que para de acontecer |
+|---|---|
+| `SLACK_WEBHOOK_URL` | o relatório no canal. A triagem e a remediação seguem |
+| `PAGERDUTY_TOKEN` ou `PAGERDUTY_FROM_EMAIL` | a nota e o fechamento do incidente. O resto segue |
+
+O `PAGERDUTY_FROM_EMAIL` existe porque a API do PagerDuty **exige o header `From`** com o e-mail de um usuário real da conta para criar nota e para resolver incidente — sem ele, `400`. É o mesmo endereço do `pagerduty_user_email` em `TF_VARS_INFRA`.
+
+**São o mesmo token em dois lugares.** O `pagerduty_token` do `TF_VARS_INFRA` serve o provider do Terraform; este secret serve o workflow. A duplicação é deliberada: ler o `TF_VARS_INFRA` aqui obrigaria o workflow a interpretar o formato `nome=valor` — e aquele parser [não apara espaço nem `\r`](https://github.com/fiap-tech-challenge-devops/.github/blob/main/docs/decisoes/0033-pagerduty-em-stage-proprio.md). O preço é lembrar dos dois ao rotacionar.
+
 ## Variáveis de repositório, que não são secret
 
 Em `Settings → Secrets and variables → Actions → Variables`. Valor visível, porque não há nada a esconder — o motivo de não ser literal no workflow é poder mudar sem commit.
@@ -86,8 +101,11 @@ Coisas que precisam existir **antes** e que nenhuma esteira cria:
 | Provedor OIDC do GitHub e a role `github-actions-iac` | IAM, à mão — ver `README.md` |
 | Conta Datadog, com API key e Application key | painel do Datadog |
 | Conta PagerDuty, com o usuário do plantão | painel do PagerDuty |
+| Chave REST da API do PagerDuty | painel do PagerDuty, `Integrations → API Access Keys` |
 | App do Slack com incoming webhook | `api.slack.com/apps` |
 | App do Datadog autorizado no workspace, e o canal registrado | painel do Datadog, `Integrations → Slack` |
 | PAT com `Contents: read and write` | GitHub, fine-grained |
 
-Os quatro últimos são OAuth ou cadastro, e não se automatizam. É a mesma lista de [0021](https://github.com/fiap-tech-challenge-devops/.github/blob/main/docs/decisoes/0021-api-key-do-datadog-por-tf-vars.md), [0028](https://github.com/fiap-tech-challenge-devops/.github/blob/main/docs/decisoes/0028-slack-para-chatops.md) e [0030](https://github.com/fiap-tech-challenge-devops/.github/blob/main/docs/decisoes/0030-self-healing-em-github-action.md), reunida num lugar só.
+Os cinco últimos são OAuth, cadastro ou credencial de longa duração, e não se automatizam. É a mesma lista de [0021](https://github.com/fiap-tech-challenge-devops/.github/blob/main/docs/decisoes/0021-api-key-do-datadog-por-tf-vars.md), [0028](https://github.com/fiap-tech-challenge-devops/.github/blob/main/docs/decisoes/0028-slack-para-chatops.md), [0030](https://github.com/fiap-tech-challenge-devops/.github/blob/main/docs/decisoes/0030-self-healing-em-github-action.md) e [0035](https://github.com/fiap-tech-challenge-devops/.github/blob/main/docs/decisoes/0035-a-action-fecha-o-incidente.md), reunida num lugar só.
+
+A chave da API do PagerDuty **não** sai do Terraform: o `pagerduty_token` existe para o provider, mas uma chave criada por ele seria destruída no destroy noturno junto com o stage, e o workflow de self-healing precisa funcionar com o ambiente fora. Mesmo raciocínio da [0027](https://github.com/fiap-tech-challenge-devops/.github/blob/main/docs/decisoes/0027-ciclo-de-vida-do-stage-datadog.md).
