@@ -29,10 +29,14 @@ A contrapartida: uma variável **faltando** reprova o plano daquele stage com `E
 | `slack_workspace` | não | nome da conta Slack **como o Datadog a registrou** no OAuth. Vazio tira o handle dos monitores |
 | `slack_channel` | não | padrão `#alertas-prod`. Precisa **já estar registrado** no painel do Datadog |
 | `datadog_site` | não | padrão `datadoghq.com` |
+| `error_rate_threshold` | não | patamar **crítico** de taxa de erro. Padrão `10`. É ele que pagina e autoriza a remediação |
+| `error_rate_warning` | não | patamar de **aviso**. Padrão `5`. Só notifica o Slack |
 
 O `slack_workspace` vazio é o estado desligado: sem ele o handle `@slack-` não entra na mensagem. Não repita o handle em `notification_targets`, ou o monitor notifica o canal duas vezes.
 
 As duas descrevem um canal que **o Terraform não cria** — ele só monta o handle. Registrar o canal é passo de painel, e as duas variáveis precisam bater com o que está lá. Errar o nome não reprova o apply: o Datadog aceita handle inexistente e o alerta deixa de chegar em silêncio.
+
+Os dois patamares de erro têm que respeitar `error_rate_warning < error_rate_threshold`, ou o Datadog recusa o monitor. O que separa um do outro é **quem responde**: o aviso vai para gente, o crítico pagina e libera a remediação automática — ver [0034](https://github.com/fiap-tech-challenge-devops/.github/blob/main/docs/decisoes/0034-escada-de-severidade-e-espera-antes-de-remediar.md).
 
 Obrigatória significa: **sem ela o plano daquele stage reprova**. As três do PagerDuty só afetam o stage `pagerduty`; as do Datadog afetam três stages.
 
@@ -56,6 +60,18 @@ gh secret set TF_VARS_INFRA --repo fiap-tech-challenge-devops/togglemaster-iac
 O comando lê do stdin e **não ecoa o valor**. Ele substitui o secret inteiro, então cole o conjunto completo, não só a linha nova.
 
 Depois de atualizar, rode a esteira do stage afetado. Mudar `datadog_api_key` tem passos extras no cluster — ver [troca de conta Datadog](https://github.com/fiap-tech-challenge-devops/.github/blob/main/docs/observabilidade/README.md#trocar-de-conta-datadog).
+
+## Variáveis de repositório, que não são secret
+
+Em `Settings → Secrets and variables → Actions → Variables`. Valor visível, porque não há nada a esconder — o motivo de não ser literal no workflow é poder mudar sem commit.
+
+| Variável | Para quê |
+|---|---|
+| `SELF_HEALING_ESPERA` | segundos que o self-healing passa **confirmando** a falha antes de remediar. Vazia, o padrão é `90` |
+
+A espera existe porque a remediação reverte um segredo e recicla pods: contra uma oscilação passageira ela é mais destrutiva que a falha, e contra uma rotação feita de propósito ela desfaz o trabalho de alguém. O workflow re-sonda a credencial durante a janela e **desiste** se ela voltar a autenticar.
+
+Para a gravação da demonstração, um valor alto — `600`, por exemplo — dá tempo de mostrar a taxa de erro subindo e abrir um trace antes de a automação agir. **Devolva para `90` depois**, ou o próximo incidente real fica dez minutos sem remediação. Em disparo manual pelo `workflow_dispatch` há o campo `espera`, que sobrepõe sem mexer na variável; `0` desliga a espera.
 
 ## O que não vive aqui
 

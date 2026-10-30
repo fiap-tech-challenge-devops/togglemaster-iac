@@ -92,6 +92,14 @@ O script sonda o `AWSCURRENT` antes de agir e **se recusa** se ele já não aute
 
 Só os version IDs, abreviados. Chave em tela numa gravação é vazamento permanente.
 
+### Para a gravação: esticar a espera
+
+O self-healing **confirma antes de agir** — ele tria, espera 90s re-sondando a credencial, e só então remedia. Com 90s não dá tempo de mostrar a taxa de erro subindo nem de abrir um trace antes de tudo voltar ao normal.
+
+Antes de gravar, suba a variável de repositório `SELF_HEALING_ESPERA` para `600`, em `Settings → Secrets and variables → Actions → Variables`. **Devolva para `90` depois** — ou o próximo incidente real fica dez minutos sem remediação.
+
+Vale dizer o número em voz alta no vídeo: *"em produção isso é 90 segundos; estiquei para dez minutos nesta gravação"*. O tempo de espera antes de uma ação automática destrutiva ser um parâmetro consciente é o ponto, e a espera existe para não atropelar quem esteja consertando à mão — ver [0034](https://github.com/fiap-tech-challenge-devops/.github/blob/main/docs/decisoes/0034-escada-de-severidade-e-espera-antes-de-remediar.md).
+
 ## Por que o tráfego precisa existir
 
 Os monitores avaliam **janelas móveis**. Sem requisição não há denominador para a taxa de erro nem amostra para o percentil, e os oito voltam a `NO DATA` em cinco minutos.

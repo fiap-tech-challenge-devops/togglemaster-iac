@@ -30,8 +30,23 @@ variable "service_namespace" {
   default     = "togglemaster"
 }
 
+# Escada de dois patamares. O 5% do enunciado é exemplo, não regra — ele cita
+# "taxa de HTTP 5xx do auth-service acima de 5%" como ilustração —, então ele
+# virou o aviso e o crítico subiu. O que separa os dois não é gravidade
+# percebida: é quem responde. O aviso vai para gente; o crítico pagina e
+# autoriza a remediação automática, que reverte um segredo e recicla pods.
+#
+# A faixa entre os dois é onde vive a degradação parcial — réplica ruim, banco
+# lento, pod com config velha. Nenhuma delas se conserta revertendo segredo,
+# então é correto que essa faixa pare no Slack.
 variable "error_rate_threshold" {
-  description = "Percentual de erro que dispara o alerta. O enunciado pede 5%."
+  description = "Percentual de erro do patamar crítico: pagina e autoriza a remediação automática."
+  type        = number
+  default     = 10
+}
+
+variable "error_rate_warning" {
+  description = "Percentual de erro do patamar de aviso: só notifica o Slack."
   type        = number
   default     = 5
 }

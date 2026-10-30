@@ -3,6 +3,9 @@ locals {
 
   # Nos oito monitores: a escolha foi paginar tudo, aceitando que o incidente
   # do evaluation abra e resolva sozinho quando o self-healing agir.
+  #
+  # Nos quatro de taxa de erro ele entra só no patamar crítico; nos de latência
+  # segue em toda transição, porque lá não existe escada.
   paginar = var.pagerduty_habilitado ? "\n\n@pagerduty-${var.service_namespace}-${var.environment}" : ""
 
   # O canal é registrado à mão; o handle é código. Formato qualificado pela
@@ -42,7 +45,9 @@ locals {
 resource "datadog_monitor" "taxa_de_erro" {
   for_each = local.servicos
 
-  name = "[${var.environment}] ${each.key} — taxa de erro acima de ${var.error_rate_threshold}%"
+  # Os dois patamares no nome: o avaliador que procurar o 5% do enunciado
+  # encontra, e a escada por cima fica visível no print.
+  name = "[${var.environment}] ${each.key} — taxa de erro: aviso ${var.error_rate_warning}%, crítico ${var.error_rate_threshold}%"
   type = "query alert"
 
   query = <<-EOT
@@ -53,16 +58,35 @@ resource "datadog_monitor" "taxa_de_erro" {
     ) * 100 > ${var.error_rate_threshold}
   EOT
 
+  # Os blocos is_warning/is_alert são o mecanismo do Datadog para rotear por
+  # estado. Handle FORA deles notifica em toda transição — é onde o Slack mora,
+  # porque o ChatOps quer ver subir e recuperar.
+  #
+  # O PagerDuty reaparece em TODA saída do crítico, senão o incidente não
+  # resolve. São duas saídas, não uma: na descida a razão drena pela faixa de
+  # aviso antes de chegar a zero, então a transição comum é alert → warn → OK.
+  #
+  # Tag de fechamento em linha própria: handle colado nela corre o risco de ter
+  # o {{/is_alert}} absorvido pelo parser, e a falha seria o webhook nunca
+  # disparar, em silêncio. Mesmo motivo do handle em linha própria na 0032.
   message = <<-EOT
-    O `${each.key}` está respondendo erro em mais de ${var.error_rate_threshold}% das requisições nos últimos 5 minutos.
+    {{#is_warning}}A taxa de erro do `${each.key}` passou de ${var.error_rate_warning}%, ainda abaixo do patamar crítico de ${var.error_rate_threshold}%. Não pagina e não aciona remediação — é para olhar antes de chegar lá.{{/is_warning}}
+    {{#is_alert}}O `${each.key}` está respondendo erro em mais de ${var.error_rate_threshold}% das requisições nos últimos 5 minutos.{{/is_alert}}
 
     Ele ${each.value.papel}, e ${each.value.impacto}.
 
-    Traces: https://app.${var.datadog_site}/apm/services/${each.key}?env=${var.environment}${local.notify}${local.slack}${local.paginar}${lookup(local.remediacao, each.key, "")}
+    Traces: https://app.${var.datadog_site}/apm/services/${each.key}?env=${var.environment}${local.notify}${local.slack}
+    {{#is_alert}}${local.paginar}${lookup(local.remediacao, each.key, "")}
+    {{/is_alert}}
+    {{#is_recovery}}${local.paginar}
+    {{/is_recovery}}
+    {{#is_alert_to_warning}}${local.paginar}
+    {{/is_alert_to_warning}}
   EOT
 
   monitor_thresholds {
     critical = var.error_rate_threshold
+    warning  = var.error_rate_warning
   }
 
   # Tráfego é esparso: sem isto, toda janela sem chamada viraria alerta.

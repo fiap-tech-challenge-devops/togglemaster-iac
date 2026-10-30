@@ -241,13 +241,19 @@ cat <<EOF
 
   ${B}2 a 6 min${N}     o monitor do Datadog dispara
                 ${CINZ}janela de 5 min + evaluation_delay de 60s${N}
+                ${CINZ}aviso (5%) e crítico (10%) caem quase juntos: numa quebra${N}
+                ${CINZ}total a razão cruza os dois com ~15s de diferença${N}
 
   ${B}no disparo${N}    três destinos ao mesmo tempo:
                   • PagerDuty abre incidente
                   • Slack recebe o aviso em #alertas-prod
                   • o webhook dispara a esteira de self-healing
 
-  ${B}~50 s${N}         a esteira reproduz, tria, remedia e verifica
+  ${B}+ espera${N}      a esteira tria e então ${B}confirma${N}, re-sondando a credencial
+                ${CINZ}não remedia o que se resolveu sozinho — 90s por padrão,${N}
+                ${CINZ}na variável de repositório SELF_HEALING_ESPERA${N}
+
+  ${B}~50 s${N}         remedia e verifica
 
   ${B}no fim${N}        o Slack recebe o relatório do que foi feito
 

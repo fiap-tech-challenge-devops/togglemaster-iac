@@ -19,6 +19,9 @@ on:
         description: Remediar se a sonda confirmar (desmarcado = só diagnostica)
         type: boolean
         default: false
+      espera:
+        description: Segundos confirmando antes de remediar (vazio = padrão, 0 = sem espera)
+        default: ''
 
 permissions:
   id-token: write
@@ -214,10 +217,88 @@ jobs:
             --output text)
           echo "fora=${fora:-nenhuma}" >> "$GITHUB_OUTPUT"
 
-      - name: 6 · Remediação — reverter a rotação
+      # A remediação reverte um segredo e recicla pods. Fazer isso sobre uma
+      # oscilação passageira é pior que esperar, e pior ainda é desfazer uma
+      # rotação que uma pessoa fez de propósito. Então confirma antes de agir.
+      #
+      # Re-sondagem, não timer: se curou sozinho na espera, nada é feito, e
+      # isso vai para o relatório como informação útil.
+      - name: 6 · Confirmação — a falha persiste?
+        id: confirmacao
+        if: steps.http.outputs.causa == 'credencial'
+        env:
+          ALB: ${{ steps.alb.outputs.host }}
+          # Variável de repositório, não literal: a gravação da demonstração
+          # precisa de uma espera longa para dar tempo de mostrar os traces, e
+          # isso não pode exigir commit. Padrão de produção são 90s.
+          ESPERA: ${{ inputs.espera || vars.SELF_HEALING_ESPERA || '90' }}
+          CODIGO_INICIAL: ${{ steps.http.outputs.codigo }}
+        run: |
+          set -euo pipefail
+
+          # A espera vem de uma variável de repositório, que é texto digitado à
+          # mão. "90s" ou vazio quebrariam a comparação numérica e o passo
+          # falharia — sem remediar, mas sem dizer por quê.
+          case "$ESPERA" in
+            ''|*[!0-9]*)
+              echo "ESPERA inválida ('$ESPERA'). Usando o padrão de 90s."
+              ESPERA=90
+              ;;
+          esac
+          echo "espera=$ESPERA" >> "$GITHUB_OUTPUT"
+
+          if [ "$ESPERA" -eq 0 ]; then
+            echo "Espera desativada. Remediando com a sonda inicial ($CODIGO_INICIAL)."
+            echo "persiste=true"          >> "$GITHUB_OUTPUT"
+            echo "codigo=$CODIGO_INICIAL" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [ "$ESPERA" -lt 15 ]; then
+            intervalo=$ESPERA
+          else
+            intervalo=15
+          fi
+
+          echo "Confirmando por ${ESPERA}s, sondando a cada ${intervalo}s."
+          decorrido=0
+          codigo="$CODIGO_INICIAL"
+
+          while [ "$decorrido" -lt "$ESPERA" ]; do
+            sleep "$intervalo"
+            decorrido=$(( decorrido + intervalo ))
+
+            # A chave é relida a cada volta. Se uma pessoa corrigiu o segredo
+            # durante a espera, a sonda vê a chave nova e a automação desiste —
+            # é essa releitura que impede de desfazer o trabalho dela.
+            key=$(aws secretsmanager get-secret-value --secret-id "$SEGREDO" \
+              --version-stage AWSCURRENT --query SecretString --output text \
+              | jq -r .SERVICE_API_KEY)
+            echo "::add-mask::$key"
+
+            codigo=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 \
+              "http://$ALB/flags/$FLAG_SONDA" -H "Authorization: Bearer $key" || echo 000)
+            echo "${decorrido}s/${ESPERA}s · GET /flags/$FLAG_SONDA -> $codigo"
+          done
+
+          # Decide pela última sonda, não pelo histórico: um 200 no meio da
+          # janela seguido de 401 significa que ainda está quebrado.
+          echo "codigo=$codigo" >> "$GITHUB_OUTPUT"
+          case "$codigo" in
+            401|403)
+              echo "A falha persiste depois de ${ESPERA}s. Remediando."
+              echo "persiste=true" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "A credencial voltou a autenticar ($codigo). Nada a remediar."
+              echo "persiste=false" >> "$GITHUB_OUTPUT"
+              ;;
+          esac
+
+      - name: 7 · Remediação — reverter a rotação
         id: remediacao
         if: >-
-          steps.http.outputs.causa == 'credencial' &&
+          steps.confirmacao.outputs.persiste == 'true' &&
           (github.event_name == 'repository_dispatch' || inputs.remediar)
         env:
           ALB: ${{ steps.alb.outputs.host }}
@@ -284,7 +365,7 @@ jobs:
             echo "para=$anterior"
           } >> "$GITHUB_OUTPUT"
 
-      - name: 7 · Verificação
+      - name: 8 · Verificação
         id: verificacao
         if: steps.remediacao.outputs.feito == 'true'
         env:
@@ -346,7 +427,10 @@ jobs:
             echo "|---|---|---|"
             echo "| Reproduz (\`GET /evaluate\`) | ${{ steps.reproduz.outputs.codigo }} | ${{ steps.reproduz.outputs.reproduz == 'true' && 'segue' || 'não reproduz — encerrado' }} |"
             if [ "${{ steps.reproduz.outputs.reproduz }}" = "true" ]; then
-              echo "| Credencial / auth / banco (\`GET /flags\`) | ${{ steps.http.outputs.codigo }} → \`${{ steps.http.outputs.causa }}\` | ${{ steps.http.outputs.causa == 'credencial' && 'remediação' || 'descartada' }} |"
+              echo "| Credencial / auth / banco (\`GET /flags\`) | ${{ steps.http.outputs.codigo }} → \`${{ steps.http.outputs.causa }}\` | ${{ steps.http.outputs.causa == 'credencial' && 'confirma antes de remediar' || 'descartada' }} |"
+              if [ "${{ steps.http.outputs.causa }}" = "credencial" ]; then
+                echo "| Confirmação após ${{ steps.confirmacao.outputs.espera }}s | ${{ steps.confirmacao.outputs.codigo }} | ${{ steps.confirmacao.outputs.persiste == 'true' && 'persiste — remedia' || 'recuperou na espera — encerrado' }} |"
+              fi
               echo "| Pods | ${{ steps.pods.outputs.achado }} | reporta |"
               echo "| Nós | ${{ steps.nos.outputs.nao_prontos }} · eventos: ${{ steps.nos.outputs.eventos }} | reporta |"
               echo "| RDS | ${{ steps.rds.outputs.fora }} | reporta |"
@@ -362,6 +446,10 @@ jobs:
               echo "**Remediação abortada:** a chave do \`AWSPREVIOUS\` também não autentica (${{ steps.remediacao.outputs.candidata }})."
               echo
               echo "As etiquetas **não** foram movidas, então o degrau de rollback fica preservado. Ação humana necessária."
+            elif [ "${{ steps.confirmacao.outputs.persiste }}" = "false" ]; then
+              echo "**Remediação não executada:** a credencial voltou a autenticar durante a janela de confirmação de ${{ steps.confirmacao.outputs.espera }}s (sonda ${{ steps.confirmacao.outputs.codigo }})."
+              echo
+              echo "Ou a falha era passageira, ou alguém corrigiu o segredo nesse intervalo. Nos dois casos reverter a rotação seria errado — no segundo, desfaria a correção. Nada foi alterado."
             elif [ "${{ steps.http.outputs.causa }}" = "credencial" ]; then
               echo "**Remediação não executada:** confirmada pela sonda, mas o disparo manual veio sem \`remediar\`."
             else
@@ -387,6 +475,10 @@ jobs:
 
           elif [ "${{ steps.reproduz.outputs.reproduz }}" = "false" ]; then
             printf -v texto ':mag: *%s — falha não se confirma*\nO monitor disparou, mas `/evaluate` responde 200. Nada remediado.' "$SERVICO"
+
+          elif [ "${{ steps.confirmacao.outputs.persiste }}" = "false" ]; then
+            printf -v texto ':hourglass: *%s — recuperou na janela de confirmação*\nA credencial voltou a autenticar em %ss de espera (sonda %s).\nSe foi você que corrigiu o segredo: era isso que a espera existia para não atropelar. Nada foi alterado.' \
+              "$SERVICO" "${{ steps.confirmacao.outputs.espera }}" "${{ steps.confirmacao.outputs.codigo }}"
 
           elif [ "${{ steps.remediacao.outputs.feito }}" = "true" ]; then
             # Nomear o que cada número significa: o valor da verificação em duas

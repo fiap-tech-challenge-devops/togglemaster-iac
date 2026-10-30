@@ -2,6 +2,9 @@ locals {
   # Só o monitor de taxa de erro do evaluation-service aciona o webhook: é a
   # única falha com remediação ligada. Ver ADR 0032.
   #
+  # Vai dentro de {{#is_alert}} na mensagem, então o aviso de 5% não chega aqui
+  # — a remediação automática é autorizada só pelo patamar crítico. Ver 0034.
+  #
   # Em linha própria: handle colado numa URL corre risco de ser absorvido pelo
   # parser, e a falha seria o webhook nunca disparar, em silêncio.
   remediacao = {
@@ -30,8 +33,9 @@ resource "datadog_webhook" "self_healing" {
     "Authorization" = format("Bearer $%s", datadog_webhook_custom_variable.github_dispatch_token.name)
   })
 
-  # A transição vai no payload porque o webhook também dispara em Recovered,
-  # Renotify, Warn e No Data — o porteiro da Action filtra por ela.
+  # A transição vai no payload para o porteiro filtrar. Com o handle dentro de
+  # {{#is_alert}}, Warn e Recovered já não chegam aqui — mas o filtro fica:
+  # ele é a única defesa se alguém editar a mensagem pela UI.
   payload = jsonencode({
     event_type = "datadog-alert"
     client_payload = {
