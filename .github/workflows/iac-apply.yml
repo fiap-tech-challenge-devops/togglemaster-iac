@@ -69,6 +69,45 @@ jobs:
         kubectl get secret argocd-initial-admin-secret -n argocd \
           -o jsonpath='{.data.password}' | base64 -d
         ```
+
+        #### Acessar a stack de observabilidade
+
+        Prometheus, Grafana e Loki **não vêm deste stage**: o Argo CD os
+        sincroniza a partir do `togglemaster-gitops` — ver ADR 0003. Aparecem
+        aqui porque é este apply que sobe o Argo CD, e em poucos minutos eles
+        estão de pé. Todos são `ClusterIP`, então o acesso também é por túnel.
+
+        ```bash
+        # Grafana — é por aqui que se olha no dia a dia
+        kubectl port-forward -n observability svc/kube-prometheus-stack-grafana 3000:80
+
+        # Prometheus — para testar uma query antes de pôr no painel
+        kubectl port-forward -n observability svc/kube-prometheus-stack-prometheus 9090:9090
+
+        # Loki — só para a API direto; no dia a dia use o painel de logs do Grafana
+        kubectl port-forward -n observability svc/loki 3100:3100
+        ```
+
+        A porta do Service do Grafana é **80**, não 3000 — daí o `3000:80`.
+        Com `3000:3000` o túnel sobe, o navegador conecta e nada responde.
+
+        Abra <http://localhost:3000>, usuário `admin`. A senha vem do Secrets
+        Manager pelo External Secrets — ver ADR 0036:
+
+        ```bash
+        kubectl get secret kube-prometheus-stack-grafana -n observability \
+          -o jsonpath='{.data.admin-password}' | base64 -d
+        ```
+
+        O dashboard é **`ToggleMaster · Visão geral`**, em `Dashboards`.
+
+        Duas coisas que acontecem e não são defeito:
+
+        - **O túnel cair sozinho** significa que o pod foi movido entre nós.
+          Repita o comando; o Service é estável, o pod não.
+        - **Painel vazio logo após o apply** é retenção: o storage é `emptyDir`
+          e o Prometheus sobe sem histórico. Deixe o gerador de tráfego rodando
+          antes de gravar.
     secrets:
       aws-oidc-role-arn: ${{ secrets.AWS_OIDC_ROLE_ARN_VITAO }}
       tf-vars: ${{ secrets.TF_VARS_ADDONS }}
@@ -112,6 +151,27 @@ jobs:
       state-bucket-prefix: togglemaster-iac-tfstate
       aws-region: us-east-1
       terraform-version: "1.15.8"
+      summary-extra: |
+        #### O que subiu no Datadog
+
+        Nada aqui é `ClusterIP`: é tudo painel do SaaS, alcançável do navegador.
+
+        | O quê | Onde |
+        |---|---|
+        | 8 monitores, dois golden signals por serviço | `Monitors → Manage Monitors`, filtrando por `[prod]` |
+        | Dashboard `ToggleMaster · Microservices Performance` | `Dashboards` |
+        | Webhook que dispara o self-healing | `Integrations → Webhooks` |
+        | APM e Service Map | `APM → Service Map` |
+
+        Os monitores de taxa de erro avisam em 5% e paginam em 10% — ver ADR 0034.
+        O dashboard não atende requisito do enunciado: ele existe para a
+        demonstração caber numa tela, e o que o enunciado pede é o do Grafana.
+        Ver ADR 0038.
+
+        **Antes de gravar, confira as regras de notificação do plantonista** em
+        `My Profile → Notification Rules`, no PagerDuty. O Terraform declara
+        quem é acionado, não por qual canal — e sem regra ativa o incidente abre
+        e ninguém recebe. Ver ADR 0033.
     secrets:
       aws-oidc-role-arn: ${{ secrets.AWS_OIDC_ROLE_ARN_VITAO }}
       tf-vars: ${{ secrets.TF_VARS_INFRA }}
