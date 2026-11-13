@@ -21,6 +21,7 @@ A contrapartida: uma variável **faltando** reprova o plano daquele stage com `E
 |---|---|---|
 | `datadog_api_key` | **sim** | `infra` grava no Secrets Manager; `datadog` e `pagerduty` autenticam o provider |
 | `datadog_app_key` | **sim** | provider do Datadog nos stages `datadog` e `pagerduty` |
+| `grafana_admin_password` | **sim** | senha do admin do Grafana. `infra` grava no Secrets Manager e o External Secrets a materializa no cluster. Mínimo de 8 caracteres, validado no plano |
 | `github_dispatch_token` | **sim** | PAT que o webhook do Datadog usa para o `repository_dispatch` |
 | `pagerduty_token` | **sim** | provider do PagerDuty, e o `api_token` da integração no Datadog |
 | `pagerduty_subdomain` | **sim** | a parte antes de `.pagerduty.com` |
