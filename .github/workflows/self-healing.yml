@@ -407,6 +407,15 @@ jobs:
 
           [ "$ok" = true ] || exit 1
 
+      # O relatório é a evidência da execução, e quem o lê não acompanhou o run.
+      # Por isso o veredito vem primeiro — o que estava errado e o que foi feito
+      # — e o diagnóstico fica abaixo, para quem quiser conferir como se chegou
+      # lá. A ordem inversa é a tentação natural, porque é a ordem em que o
+      # workflow executa, e é a que faz ninguém ler.
+      #
+      # Valores em env, não interpolados no corpo do script: o payload do
+      # webhook é entrada externa, e `${{ }}` dentro de `run:` vira texto no
+      # shell antes de existir variável.
       - name: Relatório
         if: always()
         env:
@@ -415,45 +424,139 @@ jobs:
           CICLO: ${{ github.event.client_payload.ciclo || 'manual' }}
           LINK: ${{ github.event.client_payload.link }}
           TENTATIVA: ${{ needs.porteiro.outputs.motivo }}
+          R_CODIGO: ${{ steps.reproduz.outputs.codigo }}
+          R_REPRODUZ: ${{ steps.reproduz.outputs.reproduz }}
+          H_CODIGO: ${{ steps.http.outputs.codigo }}
+          H_CAUSA: ${{ steps.http.outputs.causa }}
+          C_ESPERA: ${{ steps.confirmacao.outputs.espera }}
+          C_CODIGO: ${{ steps.confirmacao.outputs.codigo }}
+          C_PERSISTE: ${{ steps.confirmacao.outputs.persiste }}
+          P_ACHADO: ${{ steps.pods.outputs.achado }}
+          N_NAOPRONTOS: ${{ steps.nos.outputs.nao_prontos }}
+          N_EVENTOS: ${{ steps.nos.outputs.eventos }}
+          D_FORA: ${{ steps.rds.outputs.fora }}
+          M_FEITO: ${{ steps.remediacao.outputs.feito }}
+          M_CANDIDATA: ${{ steps.remediacao.outputs.candidata }}
+          M_DE: ${{ steps.remediacao.outputs.de }}
+          M_PARA: ${{ steps.remediacao.outputs.para }}
+          V_SONDA: ${{ steps.verificacao.outputs.sonda }}
+          V_FLUXO: ${{ steps.verificacao.outputs.fluxo }}
+          V_TENTATIVAS: ${{ steps.verificacao.outputs.tentativas }}
+          V_OK: ${{ steps.verificacao.outputs.ok }}
         run: |
+          # --- veredito ------------------------------------------------------
+          # Sete desfechos possíveis. A ordem dos testes importa: o mais
+          # específico primeiro, senão um caso cai no ramo do outro.
+          if [ "$R_REPRODUZ" = "false" ]; then
+            situacao="⚪ Nada a fazer — a falha não reproduz"
+            problema="O alerta disparou, mas na hora da verificação o fluxo de avaliação respondeu \`200\`. Ou o problema foi passageiro, ou já tinha sido corrigido."
+            acao="**Nenhuma alteração foi feita.** A automação parou no primeiro teste, de propósito: remediar o que já está são é pior que não agir."
+            prova=""
+          elif [ "$M_FEITO" = "true" ] && [ "$V_OK" = "true" ]; then
+            situacao="✅ Resolvido"
+            problema="**A credencial de serviço gravada no Secrets Manager não autentica.** O \`$SERVICO\` chama o \`auth-service\` para validar a chave e recebe \`$H_CODIGO\`, então devolve erro ao cliente. É a falha que nenhum controlador do Kubernetes conserta: o pod está saudável, o processo está no ar, e o valor errado está na AWS."
+            acao="**A etiqueta \`AWSCURRENT\` do segredo voltou de \`$M_DE\` para \`$M_PARA\`**, o External Secrets ressincronizou o Secret do cluster, e os pods do \`$SERVICO\` foram reciclados para recarregar o valor. Os três passos são necessários: o primeiro corrige a causa, o segundo adianta o que o ESO faria em até 1h, e o terceiro é o único jeito de um pod enxergar um segredo novo."
+            prova="Depois da troca, \`GET /flags\` devolveu \`$V_SONDA\` e o fluxo completo de avaliação devolveu \`$V_FLUXO\`, na tentativa $V_TENTATIVAS de 12."
+          elif [ "$M_FEITO" = "true" ]; then
+            situacao="🔴 Remediado, mas NÃO confirmado — escalado"
+            problema="**A credencial não autenticava** (\`$H_CODIGO\`), e a reversão foi executada."
+            acao="A etiqueta voltou de \`$M_DE\` para \`$M_PARA\` e os pods foram reciclados, **mas a verificação não passou**: após 12 tentativas a sonda ficou em \`$V_SONDA\` e o fluxo em \`$V_FLUXO\`."
+            prova="**Ação humana necessária.** A causa pode ser outra além da credencial, ou haver um segundo problema por baixo. O diagnóstico abaixo é o ponto de partida."
+          elif [ -n "$M_CANDIDATA" ]; then
+            situacao="🔴 Remediação abortada — não há versão boa para onde voltar"
+            problema="**A credencial não autentica** (\`$H_CODIGO\`), e a versão anterior do segredo **também não** (\`$M_CANDIDATA\`)."
+            acao="**Nada foi alterado.** As etiquetas não foram movidas, então o degrau de rollback continua disponível para quem for corrigir à mão. Promover uma chave que já se sabe inválida só destruiria essa opção."
+            prova="**Ação humana necessária:** gerar uma credencial nova. A automação testou o candidato antes de promover, e foi isso que a impediu de piorar a situação."
+          elif [ "$C_PERSISTE" = "false" ]; then
+            situacao="⚪ Nada a fazer — a falha se resolveu durante a confirmação"
+            problema="A sonda apontou credencial (\`$H_CODIGO\`), mas durante a janela de confirmação de ${C_ESPERA}s a credencial **voltou a autenticar** (\`$C_CODIGO\`)."
+            acao="**Nenhuma alteração foi feita.** Ou a falha era passageira, ou alguém corrigiu o segredo nesse intervalo — e no segundo caso reverter teria **desfeito a correção de uma pessoa**."
+            prova="É exatamente para isso que a janela de confirmação existe."
+          elif [ "$H_CAUSA" = "credencial" ]; then
+            situacao="⚠️ Diagnosticado, mas não remediado"
+            problema="**A credencial não autentica** (\`$H_CODIGO\`), confirmada pela sonda."
+            acao="**Nenhuma alteração foi feita:** o disparo foi manual e veio sem a opção \`remediar\`."
+            prova="Rode de novo com \`remediar\` marcado para a automação agir."
+          else
+            situacao="⚠️ Causa identificada, sem remediação automática"
+            problema="A falha reproduz (\`$R_CODIGO\`), e a sonda apontou **\`${H_CAUSA:-indeterminada}\`** — que não é a credencial, a única causa que esta automação sabe tratar."
+            acao="**Nenhuma alteração foi feita.** Agir sobre uma causa que ela não entende seria chute com permissão de escrita em produção."
+            prova="**Ação humana necessária.** O diagnóstico abaixo diz onde olhar."
+          fi
+
+          # --- relatório -----------------------------------------------------
           {
-            echo "### Triagem — ${SERVICO:-?}"
+            echo "### Self-healing — \`${SERVICO:-?}\`"
+            echo
+            echo "## $situacao"
+            echo
+            echo "**O que estava errado**"
+            echo
+            echo "$problema"
+            echo
+            echo "**O que foi feito**"
+            echo
+            echo "$acao"
+            if [ -n "$prova" ]; then
+              echo
+              echo "**Como se sabe que funcionou**"
+              echo
+              echo "$prova"
+            fi
+            echo
+            echo "---"
+            echo
+            echo "#### Como o diagnóstico chegou nessa conclusão"
+            echo
+            echo "| # | O que foi testado | A pergunta que ele responde | Resultado |"
+            echo "|---|---|---|---|"
+            echo "| 1 | \`GET /evaluate\` pelo ALB | O problema ainda está acontecendo? | \`$R_CODIGO\` — $([ "$R_REPRODUZ" = "true" ] && echo 'ainda acontece' || echo 'não acontece mais') |"
+
+            if [ "$R_REPRODUZ" = "true" ]; then
+              echo "| 2 | \`GET /flags\` com a chave do Secrets Manager | A credencial autentica? E se não, o que falhou? | \`$H_CODIGO\` → **${H_CAUSA:-?}** |"
+              if [ "$H_CAUSA" = "credencial" ]; then
+                echo "| 3 | A mesma sonda, re-executada por ${C_ESPERA}s | É passageiro ou persiste? | \`$C_CODIGO\` — $([ "$C_PERSISTE" = "true" ] && echo 'persiste' || echo 'recuperou sozinho') |"
+              else
+                # Sem esta linha a numeração pularia de 2 para 4 e quem lê se
+                # perguntaria o que foi o teste 3. Os números são os mesmos dos
+                # passos no log, então não podem ser renumerados.
+                echo "| 3 | _(janela de confirmação)_ | É passageiro ou persiste? | não executado — só se aplica à causa credencial |"
+              fi
+              echo "| 4 | Pods do namespace | Há pod reiniciando, sem memória ou fora do ar? | ${P_ACHADO:-nenhum} |"
+              echo "| 5 | Nós do cluster | Há nó não pronto, ou spot recuperado? | ${N_NAOPRONTOS:-nenhum} · eventos: ${N_EVENTOS:-nenhum} |"
+              echo "| 6 | Instâncias RDS | Algum banco fora do ar? | ${D_FORA:-nenhuma} |"
+              echo
+              echo "O **teste 2 é o que diagnostica**, e ele distingue cinco causas com uma requisição só, porque o \`flag-service\` responde um código diferente para cada uma:"
+              echo
+              echo "| Código | Significa |"
+              echo "|---|---|"
+              echo "| \`401\` · \`403\` | a credencial não autentica — **é a única que esta automação remedia** |"
+              echo "| \`404\` | a credencial está boa; a flag da sonda é que não existe |"
+              echo "| \`500\` | banco do \`flag-service\` |"
+              echo "| \`503\` | \`auth-service\` fora do ar |"
+              echo "| \`504\` | \`auth-service\` lento |"
+              echo
+              echo "Os testes 4, 5 e 6 **não decidem nada** — eles existem para o relatório dizer o que mais estava acontecendo no cluster no momento da falha."
+            fi
+
+            if [ "$M_FEITO" = "true" ] || [ -n "$M_CANDIDATA" ]; then
+              echo
+              echo "#### Antes de promover, a chave candidata foi testada"
+              echo
+              echo "A automação leu a chave do \`AWSPREVIOUS\` e **autenticou com ela** antes de mover qualquer etiqueta: resultado \`$M_CANDIDATA\`. Promover às cegas poderia trocar uma credencial quebrada por outra, e gastar o único degrau de rollback disponível."
+            fi
+
+            echo
+            echo "---"
             echo
             echo "**Origem:** $MONITOR  "
             echo "**Ciclo:** \`$CICLO\` · $TENTATIVA  "
-            [ -n "$LINK" ] && echo "**Alerta:** $LINK  "
-            echo
-            echo "| Sonda | Resultado | Ação |"
-            echo "|---|---|---|"
-            echo "| Reproduz (\`GET /evaluate\`) | ${{ steps.reproduz.outputs.codigo }} | ${{ steps.reproduz.outputs.reproduz == 'true' && 'segue' || 'não reproduz — encerrado' }} |"
-            if [ "${{ steps.reproduz.outputs.reproduz }}" = "true" ]; then
-              echo "| Credencial / auth / banco (\`GET /flags\`) | ${{ steps.http.outputs.codigo }} → \`${{ steps.http.outputs.causa }}\` | ${{ steps.http.outputs.causa == 'credencial' && 'confirma antes de remediar' || 'descartada' }} |"
-              if [ "${{ steps.http.outputs.causa }}" = "credencial" ]; then
-                echo "| Confirmação após ${{ steps.confirmacao.outputs.espera }}s | ${{ steps.confirmacao.outputs.codigo }} | ${{ steps.confirmacao.outputs.persiste == 'true' && 'persiste — remedia' || 'recuperou na espera — encerrado' }} |"
-              fi
-              echo "| Pods | ${{ steps.pods.outputs.achado }} | reporta |"
-              echo "| Nós | ${{ steps.nos.outputs.nao_prontos }} · eventos: ${{ steps.nos.outputs.eventos }} | reporta |"
-              echo "| RDS | ${{ steps.rds.outputs.fora }} | reporta |"
-            fi
-            echo
-            if [ "${{ steps.remediacao.outputs.feito }}" = "true" ]; then
-              echo "**Candidato testado antes de promover:** chave do \`AWSPREVIOUS\` → ${{ steps.remediacao.outputs.candidata }} (autentica)"
-              echo
-              echo "**Remediação:** version stage \`${{ steps.remediacao.outputs.de }}\` → \`${{ steps.remediacao.outputs.para }}\`, ESO sincronizado, pods do \`evaluation-service\` reciclados"
-              echo
-              echo "**Verificação:** sonda ${{ steps.verificacao.outputs.sonda }} · fluxo ${{ steps.verificacao.outputs.fluxo }} em ${{ steps.verificacao.outputs.tentativas }} tentativa(s) — ${{ steps.verificacao.outputs.ok == 'true' && 'resolvido' || 'NÃO resolvido, escalado' }}"
-            elif [ -n "${{ steps.remediacao.outputs.candidata }}" ]; then
-              echo "**Remediação abortada:** a chave do \`AWSPREVIOUS\` também não autentica (${{ steps.remediacao.outputs.candidata }})."
-              echo
-              echo "As etiquetas **não** foram movidas, então o degrau de rollback fica preservado. Ação humana necessária."
-            elif [ "${{ steps.confirmacao.outputs.persiste }}" = "false" ]; then
-              echo "**Remediação não executada:** a credencial voltou a autenticar durante a janela de confirmação de ${{ steps.confirmacao.outputs.espera }}s (sonda ${{ steps.confirmacao.outputs.codigo }})."
-              echo
-              echo "Ou a falha era passageira, ou alguém corrigiu o segredo nesse intervalo. Nos dois casos reverter a rotação seria errado — no segundo, desfaria a correção. Nada foi alterado."
-            elif [ "${{ steps.http.outputs.causa }}" = "credencial" ]; then
-              echo "**Remediação não executada:** confirmada pela sonda, mas o disparo manual veio sem \`remediar\`."
-            else
-              echo "**Nenhuma remediação disponível para a causa encontrada.** Diagnóstico acima; ação humana necessária."
+            # if, e não `[ -n "$LINK" ] && echo`: esta é a última linha do
+            # grupo, e com LINK vazio o `&&` devolveria 1. O Actions roda
+            # `run:` com bash -e, então o passo falharia num disparo manual,
+            # que é justamente o que não tem link.
+            if [ -n "$LINK" ]; then
+              echo "**Alerta:** $LINK  "
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
