@@ -134,7 +134,8 @@ resource "aws_secretsmanager_secret_version" "app_evaluation" {
   secret_string = jsonencode({ SERVICE_API_KEY = "tm_key_${random_password.service_api_key.result}" })
 }
 
-# Único segredo cujo valor vem de fora; os outros são gerados por random_password.
+# Os dois segredos abaixo são os únicos cujo valor vem de fora; os demais são
+# gerados por random_password.
 module "datadog_secret" {
   source = "github.com/fiap-tech-challenge-devops/terraform-aws-modules//secrets-manager?ref=v0.1.0"
 
@@ -144,6 +145,28 @@ module "datadog_secret" {
   secret_key_value = {
     DD_API_KEY = var.datadog_api_key
     DD_SITE    = var.datadog_site
+  }
+
+  recovery_window_in_days = 0
+  kms_key_arn             = aws_kms_key.app_secrets.arn
+
+  tags = local.tags
+}
+
+# Senha escolhida, e não random_password, porque ela é digitada ao vivo na
+# demonstração. O que importa aqui é ela ser ESTÁVEL: sem `admin.existingSecret`
+# o chart do Grafana gera uma senha nova a cada render do Argo, o Secret muda,
+# a annotation de checksum muda junto e o Deployment entra em rollout perpétuo.
+# Ver ADR 0036.
+module "grafana_secret" {
+  source = "github.com/fiap-tech-challenge-devops/terraform-aws-modules//secrets-manager?ref=v0.1.0"
+
+  name        = "${var.system}/grafana/admin"
+  description = "Credenciais do admin do Grafana, consumidas pelo chart via External Secrets"
+
+  secret_key_value = {
+    admin-user     = "admin"
+    admin-password = var.grafana_admin_password
   }
 
   recovery_window_in_days = 0

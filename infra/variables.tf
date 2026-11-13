@@ -138,3 +138,16 @@ variable "datadog_site" {
   type        = string
   default     = "datadoghq.com"
 }
+
+# Sem default, pelo mesmo motivo da key do Datadog. A validacao existe porque o
+# Grafana recusa senha vazia e o sintoma aparece so no boot do pod.
+variable "grafana_admin_password" {
+  description = "Senha do admin do Grafana, entregue por tf-vars. Consumida pelo chart via External Secrets."
+  type        = string
+  sensitive   = true
+
+  validation {
+    condition     = length(var.grafana_admin_password) >= 8
+    error_message = "A senha do admin do Grafana precisa ter ao menos 8 caracteres."
+  }
+}
