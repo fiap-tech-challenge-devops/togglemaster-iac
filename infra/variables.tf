@@ -44,20 +44,31 @@ variable "cluster_version" {
   default     = "1.34"
 }
 
-# Cinco tipos equivalentes, 2 vCPU e 8 GB cada. Em spot, um tipo só sorteia de
-# um pool só; com 5 tipos e 2 AZs são 10 pools, e a reposição quase sempre acha.
+# Cinco tipos equivalentes, 2 vCPU e 8 GB cada. Um tipo só sorteia de um pool
+# só; com 5 tipos e 2 AZs são 10 pools. Ajuda nos dois modos de capacidade.
+#
+# Em 13/11 os dez pools não bastaram: dez reposições seguidas recusadas com
+# UnfulfillableCapacity. Diversificar aumenta a chance de achar capacidade, e
+# não cria capacidade onde não há — foi essa distinção que levou o baseline
+# para on-demand.
 variable "node_instance_types" {
-  description = "Tipos de instância do node group de baseline, todos 2 vCPU e 8 GB. Quanto mais tipos, menor o risco de interrupção em spot."
+  description = "Tipos de instância do node group de baseline, todos 2 vCPU e 8 GB. Quanto mais tipos, maior a chance de o ASG achar capacidade."
   type        = list(string)
   default     = ["t3.large", "t3a.large", "m5.large", "m5a.large", "m6i.large"]
 }
 
-# SPOT no dia a dia. Vira ON_DEMAND no dia da gravação do vídeo, onde uma
-# interrupção no meio da demonstração não se distingue de defeito.
+# ON_DEMAND, e não SPOT, porque o baseline sustenta a plataforma inteira:
+# Argo CD, External Secrets, KEDA, Karpenter, Collector, Prometheus, Grafana,
+# Loki e os cinco serviços. Com ele em spot, uma recuperação derrubava metade
+# do cluster, e em 13/11 custou doze minutos com um nó só — dez reposições
+# recusadas com UnfulfillableCapacity.
+#
+# O risco de spot fica onde ele é barato de absorver: no que o Karpenter sobe
+# por demanda, que continua em ["spot", "on-demand"]. Ver ADR 0037.
 variable "node_capacity_type" {
   description = "Tipo de capacidade do node group de baseline: SPOT ou ON_DEMAND."
   type        = string
-  default     = "SPOT"
+  default     = "ON_DEMAND"
 
   validation {
     condition     = contains(["SPOT", "ON_DEMAND"], var.node_capacity_type)
@@ -77,10 +88,15 @@ variable "node_min_size" {
   default     = 2
 }
 
+# Acima do mínimo, e não igual como era antes. On-demand não é recuperado, mas
+# nó ainda morre — falha de hardware, substituição de AZ —, e com max igual ao
+# desejado o ASG só pode repor depois de perder. O terceiro nó existe apenas
+# durante a troca, então o custo em regime não muda. Quem escala além disto
+# continua sendo o Karpenter.
 variable "node_max_size" {
-  description = "Máximo de nós do baseline. Igual ao mínimo: quem escala é o Karpenter."
+  description = "Máximo de nós do baseline. Acima do desejado para o ASG repor sem ficar abaixo da capacidade."
   type        = number
-  default     = 2
+  default     = 3
 }
 
 variable "karpenter_chart_version" {
